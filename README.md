@@ -13,8 +13,18 @@ Deterministic context loading for the pi coding agent: a central trigger table m
 
 ### Installation
 
-> [!IMPORTANT]
-> [PLACEHOLDER] Document how users install or access this project.
+Until pi-cues is published to npm, install it as a pi package from git or a local clone:
+
+```bash
+# From git (cloned and reconciled to the selected ref)
+pi install git:github.com/YewFence/pi-cues
+
+# Or from a local clone — point at the repository root (the package root)
+git clone https://github.com/YewFence/pi-cues.git
+pi install ./pi-cues
+```
+
+To try it for a single invocation without adding it to settings: `pi -e git:github.com/YewFence/pi-cues`.
 
 ### Build From Source
 
@@ -80,6 +90,10 @@ See the [documentation site](https://YewFence.github.io/pi-cues/) for setup, usa
 If you have suggestions or find a bug, please [open an issue](https://github.com/YewFence/pi-cues/issues).
 
 Pull requests are welcome. See the [Contributing Guide](CONTRIBUTING.md).
+
+## Acknowledgments
+
+pi-cues' design is inspired by Firefox's [review-context.toml](https://github.com/mozilla-firefox/firefox/blob/main/review-context.toml), which loads review context through deterministic predicates (see [bugbug's design doc](https://github.com/mozilla/bugbug/blob/master/docs/code-review-skills.md)). The implementation references [pi-rules](https://github.com/code-yeongyu/pi-rules) (MIT, © Yeongyu Kim): the glob matcher, truncation budget, walk-up traversal, session dedup pattern, and the `tool_result` injection contract are adapted from its source. The skill `<skill>` block format and frontmatter stripping come from [pi-mention-skill](https://github.com/zigai/pi-tweaks) (MIT, © zigai). See [NOTICE](NOTICE) for details.
 
 ## License
 

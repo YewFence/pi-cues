@@ -9,6 +9,7 @@ export default defineConfig({
   themeConfig: {
     nav: [
       { text: 'Guide', link: '/guide/getting-started' },
+      { text: 'ADRs', link: '/adrs/' },
       { text: 'GitHub', link: 'https://github.com/YewFence/pi-cues' }
     ],
 
@@ -17,6 +18,20 @@ export default defineConfig({
         text: 'Guide',
         items: [
           { text: 'Getting Started', link: '/guide/getting-started' }
+        ]
+      },
+      {
+        text: 'ADRs',
+        items: [
+          { text: 'Overview', link: '/adrs/' },
+          { text: '0001 Central trigger table', link: '/adrs/0001-central-trigger-table' },
+          { text: '0002 shell-quote heuristics', link: '/adrs/0002-shell-quote-heuristics' },
+          { text: '0003 Skill injection', link: '/adrs/0003-skill-injection' },
+          { text: '0004 Walk-up anchor', link: '/adrs/0004-walkup-anchor-cwd' },
+          { text: '0005 Content-addressed dedup', link: '/adrs/0005-content-addressed-dedup' },
+          { text: '0006 user_bash nextTurn', link: '/adrs/0006-user-bash-next-turn' },
+          { text: '0007 Trust and boundaries', link: '/adrs/0007-trust-and-boundaries' },
+          { text: '0008 Builtin defaults', link: '/adrs/0008-builtin-defaults' }
         ]
       }
     ],

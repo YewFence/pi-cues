@@ -1,6 +1,6 @@
 # pi-cues — 设计文档
 
-> pi 扩展，受 [pi-rules](https://github.com/code-yeongyu/pi-rules) 启发：复用其触发与注入架构（`tool_result` 注入契约、会话去重模式、picomatch 匹配封装、walk-up 上下文加载），但配置模型是全新的**中央 trigger 表**。定位是 pi-rules 的替代而非共存：walk-up 上下文加载作为内置 action 提供，`.pi/rules` 目录发现与 frontmatter globs 模型不做。实现时按 LICENSE/NOTICE 条款 cp 相关文件并保留 copyright。
+> pi 扩展，设计灵感来自 Firefox [`review-context.toml`](https://github.com/mozilla-firefox/firefox/blob/main/review-context.toml) 的确定性谓词触发；实现参考 [pi-rules](https://github.com/code-yeongyu/pi-rules)：复用其触发与注入架构（`tool_result` 注入契约、会话去重模式、picomatch 匹配封装、walk-up 上下文加载），但配置模型是全新的**中央 trigger 表**。定位是 pi-rules 的替代而非共存：walk-up 上下文加载作为内置 action 提供，`.pi/rules` 目录发现与 frontmatter globs 模型不做。实现时按 LICENSE/NOTICE 条款 cp 相关文件并保留 copyright。
 >
 > 命名：cue = 线索。会话里的外部信号（bash 命令、被操作的文件路径）是线索，命中即确定性加载对应上下文。不用 trigger 是因为它没说明触发的是什么，容易被误解成某种 hook；实际只是注入一段 markdown。
 
@@ -13,7 +13,7 @@
 
 本特性把两者都变成确定性触发：**会话内首次命中某条触发条件时加载对应的 SKILL 或提示词文件，每条触发整个会话只生效一次**。
 
-设计思想对标 Firefox `review-context.toml` 的确定性谓词触发（详见 mozilla/bugbug `docs/code-review-skills.md`），运行时锚点从"diff 改动文件"换成"bash 命令 + 工具操作路径"。
+设计思想对标 Firefox `review-context.toml` 的确定性谓词触发（设计说明见 mozilla/bugbug 的 [`docs/code-review-skills.md`](https://github.com/mozilla/bugbug/blob/master/docs/code-review-skills.md)），运行时锚点从"diff 改动文件"换成"bash 命令 + 工具操作路径"。
 
 ## 目标 / 非目标
 

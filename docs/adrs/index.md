@@ -1,0 +1,14 @@
+# Architecture Decision Records
+
+pi-cues 的关键设计决策及取舍。每个 ADR 记录上下文、决策、被否掉的备选和后果；变更决策时新开 ADR，不改历史。
+
+| # | 决策 |
+|---|---|
+| [0001](0001-central-trigger-table.md) | 中央 trigger 表取代 frontmatter 规则文件 |
+| [0002](0002-shell-quote-heuristics.md) | shell-quote 启发式而非 bash AST |
+| [0003](0003-skill-injection.md) | skill 注入：getCommands 发现 + 自读全文 |
+| [0004](0004-walkup-anchor-cwd.md) | walk-up 边界锚定 ctx.cwd |
+| [0005](0005-content-addressed-dedup.md) | 按内容寻址的会话去重 |
+| [0006](0006-user-bash-next-turn.md) | user_bash 经 sendMessage(nextTurn) 注入 |
+| [0007](0007-trust-and-boundaries.md) | 信任门与路径边界 |
+| [0008](0008-builtin-defaults.md) | 内置默认 walkup AGENTS.md |
