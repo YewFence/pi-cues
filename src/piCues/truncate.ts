@@ -31,7 +31,7 @@ export function formatFileBlock(files: readonly FileContent[], header: string): 
   const entries: string[] = [];
   for (const file of files) {
     const notice = TRUNCATION_NOTICE.replace("{path}", file.path);
-    const entryHeader = `Instructions from: ${file.path}\n`;
+    const entryHeader = `source: ${file.path}\n`;
     const separator = entries.length === 0 ? 0 : "\n\n".length;
     const budget = remaining - separator - entryHeader.length;
     if (budget <= notice.length) {

@@ -29,7 +29,7 @@ import {
 } from "./walkup.js";
 
 export default function piCues(pi: ExtensionAPI): void {
-  let config: LoadedConfig = { triggers: [], diagnostics: [], files: [] };
+  let config: LoadedConfig = { triggers: [], diagnostics: [], files: [], projectUntrusted: false };
   const session: SessionState = createSessionState();
   const walkupCache: WalkupCache = createWalkupCache();
   /** Paths (and realpaths) pi already injected into the system prompt; rebuilt per run. */
@@ -38,8 +38,15 @@ export default function piCues(pi: ExtensionAPI): void {
   pi.on("session_start", (_event, ctx) => {
     clearSession(session);
     walkupCache.entries.clear();
-    config = loadConfig({ cwd: ctx.cwd, homeDir: process.env["PI_CUES_HOME"] });
+    config = loadConfig({
+      cwd: ctx.cwd,
+      homeDir: process.env["PI_CUES_HOME"],
+      projectTrusted: typeof ctx.isProjectTrusted === "function" ? ctx.isProjectTrusted() : true,
+    });
     if (ctx.hasUI) {
+      if (config.projectUntrusted) {
+        ctx.ui.notify("pi-cues: project not trusted, .pi/pi-cues.toml ignored", "warning");
+      }
       for (const diagnostic of config.diagnostics) {
         ctx.ui.notify(`pi-cues: ${diagnostic.message} (${diagnostic.source})`, diagnostic.severity);
       }
@@ -58,6 +65,14 @@ export default function piCues(pi: ExtensionAPI): void {
         nativeContextPaths.add(key);
       }
     }
+    // Tell the model what pi-cues is once per session, right where it will
+    // look for instructions. No repeat per injection: the light per-cue
+    // header (`pi-cues: trigger: ... source: ...`) carries attribution.
+    return {
+      systemPrompt:
+        event.systemPrompt +
+        "\n\npi-cues: this session has the pi-cues extension. It injects skills, prompt files, and project instructions when your bash commands or file operations match configured triggers. Blocks marked `pi-cues:`.",
+    };
   });
 
   pi.on("tool_result", (event, ctx) => {
@@ -121,11 +136,12 @@ export default function piCues(pi: ExtensionAPI): void {
       if (!trigger.tools.includes("bash") || patterns === undefined) {
         continue;
       }
-      if (!matchAnyValue(patterns, commandNames)) {
+      const matchedCommand = commandNames.find((name) => matchAnyValue(patterns, [name]));
+      if (matchedCommand === undefined) {
         continue;
       }
       for (const target of trigger.targets) {
-        const text = executeTarget(trigger, target, cwd);
+        const text = executeTarget(trigger, target, cwd, `command \`${matchedCommand}\``);
         if (text !== null) {
           texts.push(text);
         }
@@ -145,14 +161,14 @@ export default function piCues(pi: ExtensionAPI): void {
       if (trigger.tools.includes("bash")) {
         continue;
       }
-      const matched = paths.some((path) => {
+      const matchedPath = paths.find((path) => {
         if (trigger.when?.path === undefined) {
           return true; // walkup without when: every path event matches
         }
         const bases = toPathBases(path, cwd, trigger.configDir);
         return matchAnyValue(trigger.when.path, pathBaseValues(bases));
       });
-      if (!matched) {
+      if (matchedPath === undefined) {
         continue;
       }
 
@@ -175,7 +191,12 @@ export default function piCues(pi: ExtensionAPI): void {
       }
 
       for (const target of trigger.targets) {
-        const text = executeTarget(trigger, target, cwd);
+        const text = executeTarget(
+          trigger,
+          target,
+          cwd,
+          `path \`${displayPath(cwd, matchedPath)}\``,
+        );
         if (text !== null) {
           texts.push(text);
         }
@@ -189,7 +210,12 @@ export default function piCues(pi: ExtensionAPI): void {
     return texts;
   }
 
-  function executeTarget(trigger: Trigger, target: string, cwd: string): string | null {
+  function executeTarget(
+    trigger: Trigger,
+    target: string,
+    cwd: string,
+    cue: string,
+  ): string | null {
     if (trigger.action === "skill") {
       const record = claimOnce(session, dedupKey("skill", target), {
         action: "skill",
@@ -207,7 +233,7 @@ export default function piCues(pi: ExtensionAPI): void {
         return null;
       }
       record.loaded = true;
-      return block;
+      return `pi-cues: trigger: ${cue} source: ${skill?.path}\n\n${block}`;
     }
 
     if (trigger.action === "file") {
@@ -229,7 +255,7 @@ export default function piCues(pi: ExtensionAPI): void {
         return null;
       }
       record.loaded = true;
-      return formatFileBlock([{ path, body }], `Cue for ${displayPath(cwd, path)}:`);
+      return formatFileBlock([{ path, body }], `pi-cues: trigger: ${cue} source: ${path}`);
     }
 
     return null;
@@ -273,7 +299,7 @@ export default function piCues(pi: ExtensionAPI): void {
 
     const block = formatFileBlock(
       contents,
-      `Additional context for ${displayPath(cwd, targetFile)}:`,
+      `pi-cues: trigger: path \`${displayPath(cwd, targetFile)}\` (walk-up)`,
     );
     return block === "" ? null : block;
   }

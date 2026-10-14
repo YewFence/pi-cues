@@ -8,7 +8,7 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 import { parse as parseToml } from "smol-toml";
 
@@ -25,6 +25,8 @@ export interface LoadedConfig {
   diagnostics: CueDiagnostic[];
   /** Config files actually loaded, global first. */
   files: string[];
+  /** True when the project config was skipped because the directory is untrusted. */
+  projectUntrusted: boolean;
 }
 
 /**
@@ -45,11 +47,34 @@ function defaultTriggers(cwd: string): Trigger[] {
   ];
 }
 
-export function loadConfig(options: { cwd: string; homeDir?: string }): LoadedConfig {
+export interface LoadConfigOptions {
+  cwd: string;
+  homeDir?: string;
+  /**
+   * Whether the project directory is trusted (ctx.isProjectTrusted()).
+   * Untrusted project config is parsed for diagnostics but its triggers are
+   * never loaded: a globally installed extension must not execute whatever a
+   * cloned repository ships in .pi/pi-cues.toml.
+   */
+  projectTrusted?: boolean;
+}
+
+export function loadConfig(options: LoadConfigOptions): LoadedConfig {
   const home = options.homeDir ?? homedir();
-  const config: LoadedConfig = { triggers: [], diagnostics: [], files: [] };
-  const globalLevel = loadLevel(join(home, ".pi", "agent"), config);
-  const projectLevel = loadLevel(join(options.cwd, ".pi"), config);
+  const config: LoadedConfig = {
+    triggers: [],
+    diagnostics: [],
+    files: [],
+    projectUntrusted: false,
+  };
+  const globalLevel = loadLevel(join(home, ".pi", "agent"), "global", true, config);
+  const projectLevel = loadLevel(
+    join(options.cwd, ".pi"),
+    "project",
+    options.projectTrusted ?? true,
+    config,
+  );
+  config.projectUntrusted = !projectLevel.trusted && projectLevel.file !== undefined;
   if (globalLevel.defaults && projectLevel.defaults) {
     config.triggers.push(...defaultTriggers(options.cwd));
   }
@@ -60,10 +85,17 @@ export function loadConfig(options: { cwd: string; homeDir?: string }): LoadedCo
 interface LevelResult {
   triggers: Trigger[];
   defaults: boolean;
+  trusted: boolean;
+  file: string | undefined;
 }
 
-function loadLevel(baseDir: string, config: LoadedConfig): LevelResult {
-  const empty: LevelResult = { triggers: [], defaults: true };
+function loadLevel(
+  baseDir: string,
+  scope: "global" | "project",
+  trusted: boolean,
+  config: LoadedConfig,
+): LevelResult {
+  const empty: LevelResult = { triggers: [], defaults: true, trusted, file: undefined };
   const preferred = join(baseDir, "pi-cues.toml");
   const nested = join(baseDir, "extensions", "pi-cues", "config.toml");
   const hasPreferred = existsSync(preferred);
@@ -80,6 +112,7 @@ function loadLevel(baseDir: string, config: LoadedConfig): LevelResult {
   if (file === undefined) {
     return empty;
   }
+  empty.file = file;
 
   const parsed = parseConfigFile(file, config);
   if (parsed === undefined) {
@@ -95,11 +128,21 @@ function loadLevel(baseDir: string, config: LoadedConfig): LevelResult {
       message: "`defaults` must be a boolean",
     });
   }
+  // Untrusted project config is ignored wholesale — including any
+  // `defaults` override it tries to make.
+  if (!trusted) {
+    config.diagnostics.push({
+      severity: "warning",
+      source: file,
+      message: "Project is not trusted; config ignored",
+    });
+    return { triggers: [], defaults: true, trusted, file };
+  }
   const defaults = defaultsValue !== false;
 
   const rawTriggers = parsed["triggers"];
   if (rawTriggers === undefined) {
-    return { triggers: [], defaults };
+    return { triggers: [], defaults, trusted, file };
   }
   if (!Array.isArray(rawTriggers)) {
     config.diagnostics.push({
@@ -107,7 +150,7 @@ function loadLevel(baseDir: string, config: LoadedConfig): LevelResult {
       source: file,
       message: "`triggers` must be an array",
     });
-    return { triggers: [], defaults };
+    return { triggers: [], defaults, trusted, file };
   }
 
   const triggers: Trigger[] = [];
@@ -122,14 +165,14 @@ function loadLevel(baseDir: string, config: LoadedConfig): LevelResult {
       continue;
     }
 
-    const result = validateTrigger(raw, dirname(file), source);
+    const result = validateTrigger(raw, dirname(file), source, scope);
     if (result.trigger !== undefined) {
       triggers.push(result.trigger);
       continue;
     }
     config.diagnostics.push(...result.diagnostics);
   }
-  return { triggers, defaults };
+  return { triggers, defaults, trusted, file };
 }
 
 function parseConfigFile(file: string, config: LoadedConfig): Record<string, unknown> | undefined {
@@ -171,6 +214,7 @@ function validateTrigger(
   raw: Record<string, unknown>,
   configDir: string,
   source: string,
+  scope: "global" | "project",
 ): TriggerValidation {
   const reject = (message: string): TriggerValidation => ({
     diagnostics: [{ severity: "warning", source, message: `${message}; skipped` }],
@@ -190,6 +234,18 @@ function validateTrigger(
   const targets = parseStringList(raw["target"]);
   if (targets === undefined || targets.length === 0) {
     return reject(`Invalid target: ${JSON.stringify(raw["target"])}`);
+  }
+
+  // Project-level file targets must stay inside the config directory: a
+  // cloned repository has no business pointing the user's agent at files
+  // outside itself. Global config is the user's own and unrestricted.
+  if (scope === "project" && action === "file") {
+    for (const target of targets) {
+      const resolved = resolve(configDir, target);
+      if (!isSubpath(configDir, resolved)) {
+        return reject(`file target escapes the config directory: ${target}`);
+      }
+    }
   }
 
   if (actionKind === "walkup" && tools.some((tool) => !PATH_TOOL_NAMES.has(tool))) {
@@ -275,6 +331,11 @@ function parseWhen(value: unknown, tools: ToolName[], action: ActionKind): WhenV
   }
 
   return Object.keys(when).length === 0 ? { ok: false } : { ok: true, when };
+}
+
+function isSubpath(parent: string, child: string): boolean {
+  const rel = relative(parent, child);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

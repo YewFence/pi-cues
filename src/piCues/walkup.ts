@@ -5,7 +5,8 @@
  * scanner.ts (MIT License, Copyright (c) 2026 Yeongyu Kim). See NOTICE.
  *
  * The walk starts at the operated file's directory and climbs to the session
- * cwd (inclusive); files outside the cwd subtree only check cwd itself.
+ * cwd (inclusive). Files outside the cwd subtree do not trigger walk-up at
+ * all: their context is not the session's business.
  */
 import { realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
@@ -71,7 +72,7 @@ export function getWalkDirectories(anchorDir: string, targetFile: string): strin
   const anchor = resolve(anchorDir);
   const start = dirname(resolve(targetFile));
   if (!isSameOrChildPath(start, anchor)) {
-    return [anchor];
+    return [];
   }
 
   const walkDirs = [start];

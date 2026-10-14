@@ -322,6 +322,60 @@ describe("user_bash cues", () => {
   });
 });
 
+describe("trust and attribution", () => {
+  it("ignores project config and notifies when the project is untrusted", () => {
+    const project = makeDir("pi-cues-it-project-");
+    const home = makeDir("pi-cues-it-home-");
+    writeFile(
+      join(project, ".pi", "pi-cues.toml"),
+      `version = 1\n[[triggers]]\ntools = ["bash"]\nwhen.command = "jj"\naction = "skill"\ntarget = "jj-cli"\n`,
+    );
+    process.env["PI_CUES_HOME"] = home;
+    const fake = createFakePi();
+    piCues(fake.pi);
+    const ctx = {
+      cwd: project,
+      hasUI: true,
+      isProjectTrusted: () => false,
+      ui: { notify: (message: string) => fake.notices.push(message) },
+    };
+    fake.handlers.get("session_start")?.({ type: "session_start" }, ctx);
+
+    const result = fake.handlers.get("tool_result")?.(bashResult("jj log"), ctx);
+    expect(result).toBeUndefined();
+    expect(fake.notices.some((n) => n.includes("not trusted"))).toBe(true);
+  });
+
+  it("does not walk up for operated files outside the cwd subtree", () => {
+    const { fake, project, ctx } = setup(null);
+    writeFile(join(project, "AGENTS.md"), "root rules");
+
+    const result = fake.handlers.get("tool_result")?.(editResult("/etc/hosts"), ctx);
+    expect(result).toBeUndefined();
+  });
+
+  it("marks injections with a pi-cues attribution header", () => {
+    const skillPath = join(makeDir("pi-cues-it-skill-"), "SKILL.md");
+    writeFile(skillPath, "body");
+    const { fake, ctx } = setup(
+      `version = 1\n[[triggers]]\ntools = ["bash"]\nwhen.command = "jj"\naction = "skill"\ntarget = "jj-cli"\n`,
+      { "jj-cli": skillPath },
+    );
+    const text = injectedText(fake.handlers.get("tool_result")?.(bashResult("jj log"), ctx));
+    expect(text).toContain("pi-cues: trigger: command `jj` source: ");
+  });
+
+  it("announces pi-cues once in the system prompt", () => {
+    const { fake, ctx } = setup(null);
+    const result = fake.handlers.get("before_agent_start")?.(
+      { type: "before_agent_start", systemPrompt: "BASE", systemPromptOptions: {} },
+      ctx,
+    ) as { systemPrompt: string };
+    expect(result.systemPrompt).toMatch(/^BASE/);
+    expect(result.systemPrompt).toContain("pi-cues: this session has the pi-cues extension");
+  });
+});
+
 describe("session lifecycle", () => {
   it("re-fires cues after compaction", () => {
     const skillPath = join(makeDir("pi-cues-it-skill-"), "SKILL.md");

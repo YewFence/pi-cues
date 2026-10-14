@@ -65,6 +65,8 @@ flowchart LR
 
 两条管道只负责产出「待匹配字符串」——命令管道出 basename 列表，路径管道出多 base（projectRelative / scopeRelative / basename）——之后汇入同一套 `tools` + `when` 匹配与去重状态机。失败的 bash 调用（`isError: true`）也触发：失败的 `jj` 调用恰恰说明模型需要 SKILL。
 
+**注入归因**：`before_agent_start` 在 system prompt 尾部追加一行 pi-cues 说明（本会话有此扩展、标记 `pi-cues:` 的块是确定性注入而非不可信输入）——一次性的元说明，避免模型把注入块误认为提示词注入攻击。每个注入块带轻量头：`pi-cues: trigger: command \`jj\` source: /path/to/SKILL.md`（skill）、`pi-cues: trigger: path \`mise.toml\` source: /abs/prompt.md`（file）、`pi-cues: trigger: path \`src/a.ts\` (walk-up)`（walkup，块内每个文件再带 `source: {path}` 行）。
+
 **skill 动作的注入形式（已定）**：评估过 [`@zigai/pi-mention-skill`](https://github.com/zigai/pi-tweaks) 源码后确定——发现沿用 pi 原生实现：`pi.getCommands()` 过滤 `source === "skill"`（命令名带 `skill:` 前缀，剥掉后与 target 比对），从 `sourceInfo.path` 拿到 SKILL.md 路径。这样 target 与 `/skill:name` 看到的是同一份解析结果，同名冲突按 pi「先发现者胜」规则天然消歧，不自己扫目录。加载则自己做：读文件、剥 frontmatter、拼 pi 原生强制加载同款格式注入：`<skill name="..." location="...">References are relative to {baseDir}.\n\n{body}</skill>`。不用 `pi.sendUserMessage("/skill:name")`：斜杠展开是 TUI/RPC 输入管道的特性，程序化发送不保证展开。skill 正文**全文注入、不过截断预算**，对齐 pi 原生 `/skill:name` 语义；`file` 动作沿 pi-rules 的 `tool_result` 契约注入截断后的正文。
 
 ## 配置文件
@@ -75,6 +77,12 @@ flowchart LR
 - 全局：`~/.pi/agent/` 下同路径（agent 目录，非 `~/.pi/`）
 
 合并语义：**全局提供基线、项目级追加合并**。trigger 是匿名列表、没有可做覆盖键的标识，追加是唯一不引入额外概念的语义；会话去重天然吸收重复项。
+
+**信任与边界**（对齐 pi 的 project trust 模型）：
+
+- **项目配置仅在 `ctx.isProjectTrusted()` 时加载**。全局安装扩展 + 恶意仓库的场景下，仓库自带的 `.pi/pi-cues.toml` 会被整体忽略（含其中的 `defaults` 覆盖），记 diagnostic 并在 session_start notify。全局配置是用户自己的，始终加载
+- **项目配置的 `file` target 禁止逃逸配置目录**：解析后路径不以配置目录为前缀（含绝对路径指外）的条目记 diagnostic 拒载；全局配置不受此限
+- **walkup 对 cwd 子树外的被操作文件完全不触发**（早期版本还会回退检查 cwd 本身，已移除——无关路径不该拉来无关上下文）
 
 **内置默认（第零级）**：无配置也开箱即用——一条内网 walkup trigger（`tools = ["read","edit","write"]`、`target = ["AGENTS.md"]`），在全局和项目配置之前追加合并。任一配置文件写 `defaults = false` 即关闭。默认仅含 AGENTS.md：它是社区事实标准，也是 pi 原生 contextFiles 已覆盖项目根、本扩展补上子目录场景的那个文件。
 
@@ -172,7 +180,7 @@ target = ["AGENTS.md", "CLAUDE.md", "CONTEXT.md"]
 
 pi-rules 的内置能力之一：编辑某文件时，从该文件所在目录逐层向上收集 AGENTS.md 等上下文文件注入，并和 pi 原生 system prompt 的 `contextFiles` 去重（原生已加载的不重复注入）。作为 action 而非特判全局开关，理由：引擎层（遍历、排序、去重）本就不可声明化，可配置层（监听哪些工具、哪些文件名、作用域限定）完全能被 trigger 表达，且自带作用域表达力——无特判代码路径，概念统一。
 
-**walk-up 边界锚定 `ctx.cwd`**（会话工作目录，不做 repo root / 项目根检测）：从被操作文件所在目录向上走到 cwd 为止；被操作文件不在 cwd 子树下时，只检查 cwd 本身。曾考虑锚定配置文件所在目录，但 `.pi/pi-cues.toml` 形态下配置目录是 `.pi/`，项目根的 AGENTS.md 永远收集不到、全局配置锚点更是落在 `~/.pi/agent`——核心用例整个失效。cwd 对全局/项目配置语义一致，与路径匹配的 projectRelative base 同一基准，也不引入 repo root 检测；将来真有 monorepo 跨仓库需求再评估。每层检查 `target` 声明的文件名列表，按近→远顺序注入。
+**walk-up 边界锚定 `ctx.cwd`**（会话工作目录，不做 repo root / 项目根检测）：从被操作文件所在目录向上走到 cwd 为止；被操作文件不在 cwd 子树下时**不触发**。曾考虑锚定配置文件所在目录，但 `.pi/pi-cues.toml` 形态下配置目录是 `.pi/`，项目根的 AGENTS.md 永远收集不到、全局配置锚点更是落在 `~/.pi/agent`——核心用例整个失效。cwd 对全局/项目配置语义一致，与路径匹配的 projectRelative base 同一基准，也不引入 repo root 检测；将来真有 monorepo 跨仓库需求再评估。每层检查 `target` 声明的文件名列表，按近→远顺序注入。
 
 ### 会话态 walk-up 缓存
 

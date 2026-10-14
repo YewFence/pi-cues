@@ -59,6 +59,8 @@ Each target fires at most once per session (reset on compaction). `/cues status`
 
 Out of the box, pi-cues ships one builtin trigger: every read/edit/write walks up to the session cwd collecting `AGENTS.md` (deduplicated against pi's natively loaded context files). Add `defaults = false` to any config file to disable it.
 
+Security: project config loads only when the project is trusted (pi's project trust); project `file` targets must stay inside the config directory; walk-up never fires for files outside the session cwd. Injected blocks carry a `pi-cues: trigger: ... source: ...` attribution header, and the system prompt gains [one line per session](https://github.com/YewFence/pi-cues/blob/main/src/piCues/index.ts#L74) telling the model that `pi-cues:` blocks are deterministic context.
+
 ## Development
 
 ```bash

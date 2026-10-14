@@ -9,7 +9,7 @@ describe("formatFileBlock", () => {
 
   it("formats a single file with attribution header", () => {
     const block = formatFileBlock([{ path: "/repo/f.md", body: "hello" }], "Header:");
-    expect(block).toBe("\n\nHeader:\n\nInstructions from: /repo/f.md\nhello");
+    expect(block).toBe("\n\nHeader:\n\nsource: /repo/f.md\nhello");
   });
 
   it("joins multiple files in order", () => {

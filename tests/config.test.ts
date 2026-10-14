@@ -154,6 +154,32 @@ target = "AGENTS.md"
     expect(config.triggers.map((t) => t.source)).toEqual(["<builtin defaults>"]);
   });
 
+  it("rejects project file targets escaping the config directory", () => {
+    // #given a project config pointing outside itself #when loading #then the entry is rejected
+    const project = makeTree({
+      ".pi/pi-cues.toml": `version = 1\n[[triggers]]\ntools = ["read"]\nwhen.path = "x"\naction = "file"\ntarget = "../../outside.md"\n`,
+    });
+    const config = loadConfig({ cwd: project, homeDir: makeTree({}) });
+    expect(config.triggers.map((t) => t.source)).toEqual(["<builtin defaults>"]);
+    expect(config.diagnostics.some((d) => d.message.includes("escapes"))).toBe(true);
+  });
+
+  it("allows absolute file targets in global config", () => {
+    const home = makeTree({
+      ".pi/agent/pi-cues.toml": `version = 1\n[[triggers]]\ntools = ["bash"]\nwhen.command = "jj"\naction = "file"\ntarget = "/shared/jj.md"\n`,
+    });
+    const config = loadConfig({ cwd: makeTree({}), homeDir: home });
+    expect(config.triggers.some((t) => t.targets[0] === "/shared/jj.md")).toBe(true);
+  });
+
+  it("ignores project config when the project is untrusted", () => {
+    const project = makeTree({ ".pi/pi-cues.toml": VALID });
+    const config = loadConfig({ cwd: project, homeDir: makeTree({}), projectTrusted: false });
+    expect(config.triggers.map((t) => t.source)).toEqual(["<builtin defaults>"]);
+    expect(config.projectUntrusted).toBe(true);
+    expect(config.diagnostics.some((d) => d.message.includes("not trusted"))).toBe(true);
+  });
+
   it("normalizes target to a list and records the config dir", () => {
     const project = makeTree({ ".pi/pi-cues.toml": VALID });
     const config = loadConfig({ cwd: project, homeDir: makeTree({}) });

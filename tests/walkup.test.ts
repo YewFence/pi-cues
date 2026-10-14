@@ -37,7 +37,7 @@ describe("getWalkDirectories", () => {
 
   it("returns only the anchor for targets outside the anchor subtree", () => {
     const root = makeRoot();
-    expect(getWalkDirectories(root, "/elsewhere/f.ts")).toEqual([root]);
+    expect(getWalkDirectories(root, "/elsewhere/f.ts")).toEqual([]);
   });
 });
 
@@ -63,7 +63,7 @@ describe("collectContextFiles", () => {
     ]);
   });
 
-  it("checks only the anchor for a target outside the subtree", () => {
+  it("does not trigger for targets outside the anchor subtree", () => {
     const root = makeRoot();
     writeFileSync(join(root, "AGENTS.md"), "root");
     const files = collectContextFiles({
@@ -72,7 +72,7 @@ describe("collectContextFiles", () => {
       fileNames: ["AGENTS.md"],
       cache: createWalkupCache(),
     });
-    expect(files.map((f) => f.path)).toEqual([join(root, "AGENTS.md")]);
+    expect(files).toEqual([]);
   });
 
   it("serves a cache hit without rediscovery", () => {
