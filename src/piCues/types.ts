@@ -4,7 +4,7 @@
 
 export type ToolName = "bash" | "read" | "edit" | "write";
 
-export type ActionKind = "skill" | "file" | "walkup";
+export type ActionKind = "skill" | "file" | "walkup" | "inline";
 
 /**
  * Raw shape of pi-cues.toml as authored by the user. This is the source of
@@ -25,9 +25,9 @@ export interface RawTrigger {
   tools: ToolName[];
   /** Predicate. Required for skill/file; optional for walkup (omitted = every listed path event matches). */
   when?: RawWhen;
-  /** skill: inject a pi skill (full text). file: inject a prompt file (truncated). walkup: collect context files up to the session cwd. */
+  /** skill: inject a pi skill (full text). file: inject a prompt file (truncated). walkup: collect context files up to the session cwd. inline: inject the target text itself. */
   action: ActionKind;
-  /** skill: skill name(s). file: prompt file path(s), relative to the config directory (project configs must not escape it). walkup: context file name(s), e.g. AGENTS.md. */
+  /** skill: skill name(s). file: prompt file path(s), relative to the config directory (project configs must not escape it). walkup: context file name(s), e.g. AGENTS.md. inline: the literal markdown to inject. */
   target: string | string[];
 }
 

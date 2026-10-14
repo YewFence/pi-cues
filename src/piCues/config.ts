@@ -16,7 +16,7 @@ import type { ActionKind, CueDiagnostic, ToolName, Trigger, TriggerWhen } from "
 
 const TOOL_NAMES: ReadonlySet<string> = new Set(["bash", "read", "edit", "write"]);
 const PATH_TOOL_NAMES: ReadonlySet<string> = new Set(["read", "edit", "write"]);
-const ACTION_NAMES: ReadonlySet<string> = new Set(["skill", "file", "walkup"]);
+const ACTION_NAMES: ReadonlySet<string> = new Set(["skill", "file", "walkup", "inline"]);
 const WHEN_KEYS: ReadonlySet<string> = new Set(["command", "path"]);
 const CONFIG_VERSION = 1;
 

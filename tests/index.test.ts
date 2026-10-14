@@ -287,6 +287,20 @@ describe("walkup cue", () => {
   });
 });
 
+describe("inline cue", () => {
+  it("injects the target text itself, once per session", () => {
+    // #given an inline trigger on jj #when jj runs twice #then the text is injected once
+    const { fake, ctx } = setup(
+      `version = 1\n[[triggers]]\ntools = ["bash"]\nwhen.command = "jj"\naction = "inline"\ntarget = "Commit messages in Chinese."\n`,
+    );
+    const handler = fake.handlers.get("tool_result");
+    const first = handler?.(bashResult("jj st"), ctx);
+    expect(injectedText(first)).toContain("Commit messages in Chinese.");
+    expect(injectedText(first)).toContain("(inline)");
+    expect(handler?.(bashResult("jj log"), ctx)).toBeUndefined();
+  });
+});
+
 describe("user_bash cues", () => {
   it("queues matched cues for the next turn instead of interrupting", () => {
     const skillPath = join(makeDir("pi-cues-it-skill-"), "SKILL.md");

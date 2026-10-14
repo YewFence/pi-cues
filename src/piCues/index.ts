@@ -217,6 +217,20 @@ export default function piCues(pi: ExtensionAPI): void {
     cwd: string,
     cue: string,
   ): string | null {
+    if (trigger.action === "inline") {
+      // The target IS the content; the dedup key is the text itself.
+      const record = claimOnce(session, dedupKey("inline", target), {
+        action: "inline",
+        target,
+        source: trigger.source,
+        loaded: true,
+      });
+      if (record === undefined) {
+        return null;
+      }
+      return `pi-cues: trigger: ${cue} source: ${trigger.source} (inline)\n\n${target}`;
+    }
+
     if (trigger.action === "skill") {
       const record = claimOnce(session, dedupKey("skill", target), {
         action: "skill",

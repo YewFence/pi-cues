@@ -44,6 +44,12 @@ target = "./triggers/vitest.md"
 tools = ["read", "edit", "write"]
 action = "walkup"
 target = ["AGENTS.md"]
+
+[[triggers]]
+tools = ["bash"]
+when.command = "jj"
+action = "inline"
+target = "Commit messages in Chinese."
 `;
     expect(validate(parseToml(toml))).toBe(true);
   });
