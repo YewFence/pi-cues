@@ -1,12 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  claimOnce,
-  clearSession,
-  createSessionState,
-  dedupKey,
-  walkupIdentity,
-} from "../src/piCues/triggers.js";
+import { claimOnce, clearSession, createSessionState, dedupKey } from "../src/piCues/triggers.js";
 
 const record = { action: "file" as const, target: "/x.md", source: "/cfg", loaded: true };
 
@@ -31,11 +25,5 @@ describe("clearSession", () => {
     claimOnce(state, dedupKey("file", "/x.md"), record);
     clearSession(state);
     expect(claimOnce(state, dedupKey("file", "/x.md"), record)).toBeDefined();
-  });
-});
-
-describe("walkupIdentity", () => {
-  it("is stable regardless of file name order", () => {
-    expect(walkupIdentity("/r", ["B.md", "A.md"])).toBe(walkupIdentity("/r", ["A.md", "B.md"]));
   });
 });

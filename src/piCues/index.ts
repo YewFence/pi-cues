@@ -18,7 +18,6 @@ import {
   clearSession,
   createSessionState,
   dedupKey,
-  walkupIdentity,
   type SessionState,
 } from "./triggers.js";
 import type { Trigger } from "./types.js";
@@ -126,7 +125,7 @@ export default function piCues(pi: ExtensionAPI): void {
         continue;
       }
       for (const target of trigger.targets) {
-        const text = executeTarget(trigger, target, cwd, undefined);
+        const text = executeTarget(trigger, target, cwd);
         if (text !== null) {
           texts.push(text);
         }
@@ -140,6 +139,8 @@ export default function piCues(pi: ExtensionAPI): void {
       return [];
     }
     const texts: string[] = [];
+    const walkupFiles: Array<{ file: WalkupFile; source: string }> = [];
+    const walkupSeen = new Set<string>();
     for (const trigger of config.triggers) {
       if (trigger.tools.includes("bash")) {
         continue;
@@ -154,22 +155,41 @@ export default function piCues(pi: ExtensionAPI): void {
       if (!matched) {
         continue;
       }
+
+      if (trigger.action === "walkup") {
+        for (const path of paths) {
+          for (const file of collectContextFiles({
+            anchorDir: cwd,
+            targetFile: path,
+            fileNames: trigger.targets,
+            cache: walkupCache,
+          })) {
+            if (walkupSeen.has(file.realPath)) {
+              continue;
+            }
+            walkupSeen.add(file.realPath);
+            walkupFiles.push({ file, source: trigger.source });
+          }
+        }
+        continue;
+      }
+
       for (const target of trigger.targets) {
-        const text = executeTarget(trigger, target, cwd, paths[0]);
+        const text = executeTarget(trigger, target, cwd);
         if (text !== null) {
           texts.push(text);
         }
       }
     }
+
+    const walkupText = injectWalkupFiles(walkupFiles, cwd, paths[0] ?? cwd);
+    if (walkupText !== null) {
+      texts.push(walkupText);
+    }
     return texts;
   }
 
-  function executeTarget(
-    trigger: Trigger,
-    target: string,
-    cwd: string,
-    targetFile: string | undefined,
-  ): string | null {
+  function executeTarget(trigger: Trigger, target: string, cwd: string): string | null {
     if (trigger.action === "skill") {
       const record = claimOnce(session, dedupKey("skill", target), {
         action: "skill",
@@ -212,65 +232,50 @@ export default function piCues(pi: ExtensionAPI): void {
       return formatFileBlock([{ path, body }], `Cue for ${displayPath(cwd, path)}:`);
     }
 
-    return executeWalkup(trigger, cwd, targetFile);
+    return null;
   }
 
-  function executeWalkup(
-    trigger: Trigger,
+  /**
+   * Walk-up files dedup per realPath, flattened and config-independent: the
+   * same context file is injected once per session no matter which trigger
+   * (builtin default or user config) collected it. Files not found claim
+   * nothing, so a later event in another directory still discovers them.
+   */
+  function injectWalkupFiles(
+    files: ReadonlyArray<{ file: WalkupFile; source: string }>,
     cwd: string,
-    targetFile: string | undefined,
+    targetFile: string,
   ): string | null {
-    if (targetFile === undefined) {
-      return null;
-    }
-    const files: WalkupFile[] = [];
-    const seen = new Set<string>();
-    const collected = collectContextFiles({
-      anchorDir: cwd,
-      targetFile,
-      fileNames: trigger.targets,
-      cache: walkupCache,
-    });
-    for (const file of collected) {
-      if (
-        seen.has(file.realPath) ||
-        nativeContextPaths.has(file.path) ||
-        nativeContextPaths.has(file.realPath)
-      ) {
+    const contents: FileContent[] = [];
+    for (const { file, source } of files) {
+      if (nativeContextPaths.has(file.path) || nativeContextPaths.has(file.realPath)) {
         continue;
       }
-      seen.add(file.realPath);
-      files.push(file);
-    }
-
-    // Claim only when something actually loaded: a directory without context
-    // files must not burn the once-per-session slot.
-    if (files.length === 0) {
-      return null;
-    }
-    const identity = walkupIdentity(realPathOf(cwd), trigger.targets);
-    const record = claimOnce(session, dedupKey("walkup", identity), {
-      action: "walkup",
-      target: trigger.targets.join(", "),
-      source: trigger.source,
-      loaded: true,
-    });
-    if (record === undefined) {
-      return null;
-    }
-
-    const contents: FileContent[] = [];
-    for (const file of files) {
+      const record = claimOnce(session, dedupKey("walkup", file.realPath), {
+        action: "walkup",
+        target: file.path,
+        source,
+        loaded: false,
+      });
+      if (record === undefined) {
+        continue;
+      }
       let body: string;
       try {
         body = readFileSync(file.path, "utf8");
       } catch {
-        diagnose(`Context file unreadable: ${file.path}`, trigger.source);
+        diagnose(`Context file unreadable: ${file.path}`, source);
         continue;
       }
+      record.loaded = true;
       contents.push({ path: file.path, body });
     }
-    return formatFileBlock(contents, `Additional context for ${displayPath(cwd, targetFile)}:`);
+
+    const block = formatFileBlock(
+      contents,
+      `Additional context for ${displayPath(cwd, targetFile)}:`,
+    );
+    return block === "" ? null : block;
   }
 
   function diagnose(message: string, source: string): void {

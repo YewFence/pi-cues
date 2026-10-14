@@ -27,15 +27,43 @@ export interface LoadedConfig {
   files: string[];
 }
 
+/**
+ * Zero-config baseline: every read/edit/write walks up to the session cwd
+ * collecting AGENTS.md. Merged as level zero (before global and project);
+ * `defaults = false` in any config file disables it.
+ */
+function defaultTriggers(cwd: string): Trigger[] {
+  return [
+    {
+      tools: ["read", "edit", "write"],
+      when: undefined,
+      action: "walkup",
+      targets: ["AGENTS.md"],
+      configDir: cwd,
+      source: "<builtin defaults>",
+    },
+  ];
+}
+
 export function loadConfig(options: { cwd: string; homeDir?: string }): LoadedConfig {
   const home = options.homeDir ?? homedir();
   const config: LoadedConfig = { triggers: [], diagnostics: [], files: [] };
-  loadLevel(join(home, ".pi", "agent"), config);
-  loadLevel(join(options.cwd, ".pi"), config);
+  const globalLevel = loadLevel(join(home, ".pi", "agent"), config);
+  const projectLevel = loadLevel(join(options.cwd, ".pi"), config);
+  if (globalLevel.defaults && projectLevel.defaults) {
+    config.triggers.push(...defaultTriggers(options.cwd));
+  }
+  config.triggers.push(...globalLevel.triggers, ...projectLevel.triggers);
   return config;
 }
 
-function loadLevel(baseDir: string, config: LoadedConfig): void {
+interface LevelResult {
+  triggers: Trigger[];
+  defaults: boolean;
+}
+
+function loadLevel(baseDir: string, config: LoadedConfig): LevelResult {
+  const empty: LevelResult = { triggers: [], defaults: true };
   const preferred = join(baseDir, "pi-cues.toml");
   const nested = join(baseDir, "extensions", "pi-cues", "config.toml");
   const hasPreferred = existsSync(preferred);
@@ -50,25 +78,39 @@ function loadLevel(baseDir: string, config: LoadedConfig): void {
 
   const file = hasPreferred ? preferred : hasNested ? nested : undefined;
   if (file === undefined) {
-    return;
+    return empty;
   }
 
   const parsed = parseConfigFile(file, config);
   if (parsed === undefined) {
-    return;
+    return empty;
   }
   config.files.push(file);
 
+  const defaultsValue = parsed["defaults"];
+  if (defaultsValue !== undefined && typeof defaultsValue !== "boolean") {
+    config.diagnostics.push({
+      severity: "warning",
+      source: file,
+      message: "`defaults` must be a boolean",
+    });
+  }
+  const defaults = defaultsValue !== false;
+
   const rawTriggers = parsed["triggers"];
+  if (rawTriggers === undefined) {
+    return { triggers: [], defaults };
+  }
   if (!Array.isArray(rawTriggers)) {
     config.diagnostics.push({
       severity: "error",
       source: file,
       message: "`triggers` must be an array",
     });
-    return;
+    return { triggers: [], defaults };
   }
 
+  const triggers: Trigger[] = [];
   for (const [index, raw] of rawTriggers.entries()) {
     const source = `${file} triggers[${index}]`;
     if (!isRecord(raw)) {
@@ -82,11 +124,12 @@ function loadLevel(baseDir: string, config: LoadedConfig): void {
 
     const result = validateTrigger(raw, dirname(file), source);
     if (result.trigger !== undefined) {
-      config.triggers.push(result.trigger);
+      triggers.push(result.trigger);
       continue;
     }
     config.diagnostics.push(...result.diagnostics);
   }
+  return { triggers, defaults };
 }
 
 function parseConfigFile(file: string, config: LoadedConfig): Record<string, unknown> | undefined {

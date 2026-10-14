@@ -30,10 +30,6 @@ export function dedupKey(action: ActionKind, identity: string): string {
   return `${action}:${identity}`;
 }
 
-export function walkupIdentity(anchorRealPath: string, fileNames: readonly string[]): string {
-  return `${anchorRealPath}${[...fileNames].sort().join("")}`;
-}
-
 /**
  * Record `key` as fired. Returns the stored record on the first firing,
  * undefined when the key was already claimed.

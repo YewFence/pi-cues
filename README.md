@@ -57,6 +57,8 @@ target = ["AGENTS.md", "CLAUDE.md"]
 
 Each target fires at most once per session (reset on compaction). `/cues status` shows the loaded config, diagnostics, and what has fired.
 
+Out of the box, pi-cues ships one builtin trigger: every read/edit/write walks up to the session cwd collecting `AGENTS.md` (deduplicated against pi's natively loaded context files). Add `defaults = false` to any config file to disable it.
+
 ## Development
 
 ```bash

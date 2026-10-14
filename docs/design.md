@@ -74,7 +74,9 @@ flowchart LR
 - 项目：`./.pi/pi-cues.toml`（优先）**或** `./.pi/extensions/pi-cues/config.toml`——同级同时存在时只用 `pi-cues.toml`，另一个记 diagnostic；pi 的惯例是 `.pi/` 下每种资源一个扁平条目（`.pi/settings.json`、`.pi/mcp.json`），`pi-cues.toml` 因此是首选
 - 全局：`~/.pi/agent/` 下同路径（agent 目录，非 `~/.pi/`）
 
-合并语义：**全局提供基线、项目级追加合并**。trigger 是匿名列表、没有可做覆盖键的标识，追加是唯一不引入额外概念的语义；会话去重 Set 天然吸收重复项。
+合并语义：**全局提供基线、项目级追加合并**。trigger 是匿名列表、没有可做覆盖键的标识，追加是唯一不引入额外概念的语义；会话去重天然吸收重复项。
+
+**内置默认（第零级）**：无配置也开箱即用——一条内网 walkup trigger（`tools = ["read","edit","write"]`、`target = ["AGENTS.md"]`），在全局和项目配置之前追加合并。任一配置文件写 `defaults = false` 即关闭。默认仅含 AGENTS.md：它是社区事实标准，也是 pi 原生 contextFiles 已覆盖项目根、本扩展补上子目录场景的那个文件。
 
 ### Schema
 
@@ -190,7 +192,7 @@ sessionWalkupCache: Map<targetDir, {
 
 ## 去重与状态
 
-- 会话级 `Set<string>`，key 为 `action + 解析后的 target`：`file` 用相对配置目录解析出的绝对路径；`skill` 用 skill 名；`walkup` 用「cwd realPath + 文件名列表排序」拼出的稳定键（同锚点同文件名列表只加载一次，且仅在确有文件注入时才记键——首次事件没收集到任何文件不占位，后续目录的上下文文件仍有机会注入）。多个 trigger 指向同一目标时只加载一次（参考 pi-rules 的 `injectedSingleFileRules` 模式）
+- 会话级 `Set<string>`，key 为 `action + 内容标识`，**全部按内容寻址、与配置形式无关**：`file` 用相对配置目录解析出的绝对路径；`skill` 用 skill 名；`walkup` 用收集到的每个上下文文件的 realPath。多 trigger 指向同一目标只加载一次（参考 pi-rules 的 `injectedSingleFileRules` 模式）——默认 walkup `[AGENTS.md]` 与用户自定义 `walkup ["AGENTS.md","CONTEXT.md"]` 共存时，AGENTS.md 也只注入一次。walkup 按文件去重的推论：什么都没找到就什么都不记，后续事件自然重试；会话后期首次进入的目录，其中的上下文文件仍会加载（对齐 pi-rules dynamic 语义）
 - `session_start`、`session_compact`、`/reload` 时清空（compact 后旧上下文已压缩，重新触发是对的）
 - 若 pi 原生 skill 加载自带幂等（如已加载 skill 不重复进上下文），去重仍保留——避免依赖内部实现细节
 
@@ -238,8 +240,8 @@ pi-cues/
 - `match.test.ts`：命令精确匹配、路径 glob 三 base、负向排除
 - `triggers.test.ts`：会话内去重、多 trigger 同目标只加载一次、compaction 重置
 - `load.test.ts`（即 inject/skills）：`file` 动作读取 + 截断预算；`skill` 动作全文注入不截断、getCommands 发现的 `skill:` 前缀剥离与缺名处理；`walkup` 动作多层目录收集、近→远顺序、与 `contextFiles` 去重
-- `walkup.test.ts`：边界锚定配置目录、目标文件在子树外只查配置目录、会话态缓存命中与 stat 指纹失效（含 missing→exists 转变）、compaction 重置
-- `index.test.ts`（集成）：user_bash 命中后 pending 注入在下一次模型请求前发出、`!!` 前缀不触发、`/cues status` 输出 diagnostics 与去重清单
+- `walkup.test.ts`：边界锚定 cwd、目标文件在子树外只查 cwd、会话态缓存命中与 stat 指纹失效（含 missing→exists 转变）、compaction 重置
+- `index.test.ts`（集成）：user_bash 命中后 pending 注入在下一次模型请求前发出、`!!` 前缀不触发、`/cues status` 输出 diagnostics 与去重清单、内置默认 walkup 开箱即用与 `defaults = false` 关闭、跨目录后期发现、默认与自定义 walkup 按文件去重
 - 集成测试：临时 fs + 可注入 home dir，命名沿用 `#given X #when Y #then Z`
 
 ## 开放问题

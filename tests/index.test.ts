@@ -67,10 +67,12 @@ interface Fixture {
   ctx: any;
 }
 
-function setup(configToml: string, skillPaths: Record<string, string> = {}): Fixture {
+function setup(configToml: string | null, skillPaths: Record<string, string> = {}): Fixture {
   const project = makeDir("pi-cues-it-project-");
   const home = makeDir("pi-cues-it-home-");
-  writeFile(join(project, ".pi", "pi-cues.toml"), configToml);
+  if (configToml !== null) {
+    writeFile(join(project, ".pi", "pi-cues.toml"), configToml);
+  }
 
   process.env["PI_CUES_HOME"] = home;
   const fake = createFakePi(skillPaths);
@@ -186,6 +188,63 @@ describe("file cue", () => {
 });
 
 describe("walkup cue", () => {
+  it("fires out of the box via the builtin default", () => {
+    // #given no config file at all #when editing under a dir with AGENTS.md #then injected
+    const { fake, project, ctx } = setup(null);
+    writeFile(join(project, "src", "AGENTS.md"), "src rules");
+    writeFile(join(project, "src", "a.ts"), "code");
+
+    const result = fake.handlers.get("tool_result")?.(
+      editResult(join(project, "src", "a.ts")),
+      ctx,
+    );
+    expect(injectedText(result)).toContain("src rules");
+  });
+
+  it("stays silent with defaults = false and no user walkup trigger", () => {
+    const { fake, project, ctx } = setup("version = 1\ndefaults = false\n");
+    writeFile(join(project, "src", "AGENTS.md"), "src rules");
+    writeFile(join(project, "src", "a.ts"), "code");
+
+    const result = fake.handlers.get("tool_result")?.(
+      editResult(join(project, "src", "a.ts")),
+      ctx,
+    );
+    expect(result).toBeUndefined();
+  });
+
+  it("injects each context file once across builtin and user walkup triggers", () => {
+    const { fake, project, ctx } = setup(
+      `version = 1\n[[triggers]]\ntools = ["edit"]\naction = "walkup"\ntarget = ["AGENTS.md", "CONTEXT.md"]\n`,
+    );
+    writeFile(join(project, "AGENTS.md"), "root agents");
+    writeFile(join(project, "CONTEXT.md"), "root context");
+    writeFile(join(project, "a.ts"), "code");
+
+    const result = fake.handlers.get("tool_result")?.(editResult(join(project, "a.ts")), ctx);
+    const text = injectedText(result) ?? "";
+    // #then AGENTS.md appears once despite matching both the default and the user trigger
+    expect(text.match(/root agents/g)).toHaveLength(1);
+    expect(text).toContain("root context");
+  });
+
+  it("discovers context files of directories first touched later in the session", () => {
+    const { fake, project, ctx } = setup(null);
+    writeFile(join(project, "one", "AGENTS.md"), "one rules");
+    writeFile(join(project, "one", "a.ts"), "code");
+    writeFile(join(project, "two", "AGENTS.md"), "two rules");
+    writeFile(join(project, "two", "b.ts"), "code");
+
+    const handler = fake.handlers.get("tool_result");
+    expect(injectedText(handler?.(editResult(join(project, "one", "a.ts")), ctx))).toContain(
+      "one rules",
+    );
+    // #then a different directory's AGENTS.md still loads later
+    expect(injectedText(handler?.(editResult(join(project, "two", "b.ts")), ctx))).toContain(
+      "two rules",
+    );
+  });
+
   it("collects context files near to far and skips native ones", () => {
     const { fake, project, ctx } = setup(
       `version = 1\n[[triggers]]\ntools = ["read", "edit", "write"]\naction = "walkup"\ntarget = "AGENTS.md"\n`,
@@ -212,17 +271,17 @@ describe("walkup cue", () => {
     expect(text).not.toContain("root rules");
   });
 
-  it("does not burn the once-per-session slot when nothing is found", () => {
+  it("keeps quiet when nothing is found", () => {
     const { fake, project, ctx } = setup(
-      `version = 1\n[[triggers]]\ntools = ["edit"]\naction = "walkup"\ntarget = "AGENTS.md"\n`,
+      `version = 1\ndefaults = false\n[[triggers]]\ntools = ["edit"]\naction = "walkup"\ntarget = "AGENTS.md"\n`,
     );
     writeFile(join(project, "empty", "a.ts"), "code");
-    writeFile(join(project, "full", "b.ts"), "code");
 
     const handler = fake.handlers.get("tool_result");
     expect(handler?.(editResult(join(project, "empty", "a.ts")), ctx)).toBeUndefined();
 
     writeFile(join(project, "full", "AGENTS.md"), "late rules");
+    writeFile(join(project, "full", "b.ts"), "code");
     const result = handler?.(editResult(join(project, "full", "b.ts")), ctx);
     expect(injectedText(result)).toContain("late rules");
   });
