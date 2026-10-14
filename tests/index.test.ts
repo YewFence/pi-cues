@@ -559,3 +559,56 @@ describe("telemetry", () => {
     expect(existsSync(join(cache, "pi-cues"))).toBe(false);
   });
 });
+
+describe("injection notify", () => {
+  it("notifies once per tool event with the injected targets", () => {
+    const skillPath = join(makeDir("pi-cues-it-skill-"), "SKILL.md");
+    writeFile(skillPath, "body");
+    const { fake, ctx } = setup(
+      `version = 1\n[[triggers]]\ntools = ["bash"]\nwhen.command = "jj"\naction = "skill"\ntarget = "jj-cli"\n`,
+      { "jj-cli": skillPath },
+    );
+
+    fake.handlers.get("tool_result")?.(bashResult("jj log"), ctx);
+
+    expect(fake.notices).toContain("pi-cues: injected jj-cli (skill)");
+  });
+
+  it("notifies failed loads as a warning", () => {
+    const { fake, ctx } = setup(
+      `version = 1\n[[triggers]]\ntools = ["bash"]\nwhen.command = "jj"\naction = "skill"\ntarget = "ghost"\n`,
+    );
+
+    fake.handlers.get("tool_result")?.(bashResult("jj st"), ctx);
+
+    expect(fake.notices).toContain("pi-cues: failed to load ghost (skill)");
+  });
+
+  it("notifies for user_bash injections too", () => {
+    const skillPath = join(makeDir("pi-cues-it-skill-"), "SKILL.md");
+    writeFile(skillPath, "body");
+    const { fake, ctx } = setup(
+      `version = 1\n[[triggers]]\ntools = ["bash"]\nwhen.command = "jj"\naction = "skill"\ntarget = "jj-cli"\n`,
+      { "jj-cli": skillPath },
+    );
+
+    fake.handlers.get("user_bash")?.(
+      { type: "user_bash", command: "jj log", excludeFromContext: false, cwd: ctx.cwd },
+      ctx,
+    );
+
+    expect(fake.notices).toContain("pi-cues: injected jj-cli (skill)");
+    expect(fake.sent).toHaveLength(1);
+  });
+
+  it("stays quiet when nothing fires", () => {
+    const { fake, ctx } = setup(
+      `version = 1\n[[triggers]]\ntools = ["bash"]\nwhen.command = "jj"\naction = "skill"\ntarget = "jj-cli"\n`,
+    );
+
+    fake.handlers.get("tool_result")?.(bashResult("ls -la"), ctx);
+
+    expect(fake.notices.some((n) => n.startsWith("pi-cues: injected"))).toBe(false);
+    expect(fake.notices.some((n) => n.startsWith("pi-cues: failed"))).toBe(false);
+  });
+});

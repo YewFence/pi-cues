@@ -106,10 +106,12 @@ export default function piCues(pi: ExtensionAPI): void {
 
   pi.on("tool_result", (event, ctx) => {
     try {
+      const firedBefore = session.triggered.length;
       const texts =
         event.toolName === "bash"
           ? fireBashTriggers(commandInput(event), ctx.cwd)
           : firePathTriggers(extractToolPaths(event, ctx.cwd), ctx.cwd);
+      notifyCueFirings(ctx, session.triggered.slice(firedBefore));
       if (texts.length === 0) {
         return undefined;
       }
@@ -126,7 +128,9 @@ export default function piCues(pi: ExtensionAPI): void {
       if (event.excludeFromContext) {
         return undefined;
       }
+      const firedBefore = session.triggered.length;
       const texts = fireBashTriggers(extractCommands(event.command), ctx.cwd);
+      notifyCueFirings(ctx, session.triggered.slice(firedBefore));
       if (texts.length > 0) {
         pi.sendMessage(
           { customType: "pi-cues", content: texts.join("\n"), display: false },
@@ -371,6 +375,33 @@ export default function piCues(pi: ExtensionAPI): void {
     }
   }
 
+  /** One toast per tool event so firings are visible without digging into the result block. */
+  function notifyCueFirings(ctx: NotifyContext, records: readonly TriggeredRecord[]): void {
+    const injected = records.filter((record) => record.loaded);
+    const failed = records.filter((record) => !record.loaded);
+    if (injected.length > 0) {
+      ctx.ui.notify(`pi-cues: injected ${cueSummary(injected, ctx.cwd)}`, "info");
+    }
+    if (failed.length > 0) {
+      ctx.ui.notify(`pi-cues: failed to load ${cueSummary(failed, ctx.cwd)}`, "warning");
+    }
+  }
+
+  function cueSummary(records: readonly TriggeredRecord[], cwd: string): string {
+    const labels = records.map((record) => cueLabel(record, cwd));
+    return labels.length > 3
+      ? `${labels.slice(0, 2).join(", ")} +${labels.length - 2} more`
+      : labels.join(", ");
+  }
+
+  function cueLabel(record: TriggeredRecord, cwd: string): string {
+    if (record.action === "inline") {
+      const firstLine = record.target.split("\n")[0] ?? "";
+      return `inline "${firstLine.length > 32 ? `${firstLine.slice(0, 31)}…` : firstLine}"`;
+    }
+    return `${displayPath(cwd, record.target)} (${record.action})`;
+  }
+
   function isExcluded(patterns: readonly string[], cwd: string, filePath: string): boolean {
     if (patterns.length === 0) {
       return false;
@@ -412,6 +443,12 @@ export default function piCues(pi: ExtensionAPI): void {
     }
     return lines.join("\n");
   }
+}
+
+/** Minimal handler-context shape notifyCueFirings needs; the full ExtensionContext is not exported from the pi entry. */
+interface NotifyContext {
+  cwd: string;
+  ui: { notify: (message: string, type?: "info" | "warning" | "error") => void };
 }
 
 function pathKeys(filePath: string): string[] {
