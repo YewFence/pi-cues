@@ -29,6 +29,8 @@ export interface RawTrigger {
   action: ActionKind;
   /** skill: skill name(s). file: prompt file path(s), relative to the config directory (project configs must not escape it). walkup: context file name(s), e.g. AGENTS.md. inline: the literal markdown to inject. */
   target: string | string[];
+  /** walkup only: picomatch patterns matched against the collected file's path relative to the session cwd (POSIX separators). "README.md" matches only the cwd-level file; use a globstar pattern to match any depth. A leading bang (exclamation) prefix is rejected. */
+  exclude?: string | string[];
 }
 
 export interface RawWhen {
@@ -56,6 +58,8 @@ export interface Trigger {
   when?: TriggerWhen;
   action: ActionKind;
   targets: string[];
+  /** walkup only: picomatch patterns matched against the anchor-relative POSIX path of collected files. */
+  excludes: string[];
   /** Directory containing the config file that declared this trigger; base for `file` targets. */
   configDir: string;
   /** Config file path, for diagnostics and `/cues status`. */

@@ -1,13 +1,14 @@
 /**
  * Config discovery, parsing and validation.
  *
- * Two levels (global ~/.pi/agent, project <cwd>/.pi). At each level
- * `pi-cues.toml` wins over `extensions/pi-cues/config.toml`; triggers of the
- * two levels are appended (global baseline first). Invalid entries become
- * diagnostics and are skipped; the rest of the config stays active.
+ * Two levels: global `~/.pi/agent/pi-cues.toml` (the user's own, unrestricted)
+ * and project `<cwd>/.pi/extensions/pi-cues/config.toml` (its parent directory
+ * is a pi trust-requiring resource, so pi asks for trust before the project
+ * can ship any pi-cues config). Triggers of the two levels are appended
+ * (global baseline first). Invalid entries become diagnostics and are
+ * skipped; the rest of the config stays active.
  */
 import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 import { parse as parseToml } from "smol-toml";
@@ -41,6 +42,7 @@ function defaultTriggers(cwd: string): Trigger[] {
       when: undefined,
       action: "walkup",
       targets: ["AGENTS.md"],
+      excludes: [],
       configDir: cwd,
       source: "<builtin defaults>",
     },
@@ -49,25 +51,25 @@ function defaultTriggers(cwd: string): Trigger[] {
 
 export interface LoadConfigOptions {
   cwd: string;
-  homeDir?: string;
+  /** pi's agent data directory (PI_CODING_AGENT_DIR or the ~/.pi/agent default). */
+  agentDir: string;
   /**
    * Whether the project directory is trusted (ctx.isProjectTrusted()).
    * Untrusted project config is parsed for diagnostics but its triggers are
    * never loaded: a globally installed extension must not execute whatever a
-   * cloned repository ships in .pi/pi-cues.toml.
+   * cloned repository ships in .pi/extensions/pi-cues/config.toml.
    */
   projectTrusted?: boolean;
 }
 
 export function loadConfig(options: LoadConfigOptions): LoadedConfig {
-  const home = options.homeDir ?? homedir();
   const config: LoadedConfig = {
     triggers: [],
     diagnostics: [],
     files: [],
     projectUntrusted: false,
   };
-  const globalLevel = loadLevel(join(home, ".pi", "agent"), "global", true, config);
+  const globalLevel = loadLevel(options.agentDir, "global", true, config);
   const projectLevel = loadLevel(
     join(options.cwd, ".pi"),
     "project",
@@ -96,20 +98,11 @@ function loadLevel(
   config: LoadedConfig,
 ): LevelResult {
   const empty: LevelResult = { triggers: [], defaults: true, trusted, file: undefined };
-  const preferred = join(baseDir, "pi-cues.toml");
-  const nested = join(baseDir, "extensions", "pi-cues", "config.toml");
-  const hasPreferred = existsSync(preferred);
-  const hasNested = existsSync(nested);
-  if (hasPreferred && hasNested) {
-    config.diagnostics.push({
-      severity: "warning",
-      source: nested,
-      message: `Ignored: ${preferred} takes precedence at the same level`,
-    });
-  }
-
-  const file = hasPreferred ? preferred : hasNested ? nested : undefined;
-  if (file === undefined) {
+  const file =
+    scope === "project"
+      ? join(baseDir, "extensions", "pi-cues", "config.toml")
+      : join(baseDir, "pi-cues.toml");
+  if (!existsSync(file)) {
     return empty;
   }
   empty.file = file;
@@ -253,15 +246,35 @@ function validateTrigger(
     return reject("walkup triggers must not listen to bash");
   }
 
+  const excludes = parseExcludes(raw["exclude"], actionKind);
+  if (typeof excludes === "string") {
+    return reject(excludes);
+  }
+
   const when = parseWhen(raw["when"], tools, actionKind);
   if (!when.ok) {
     return reject(`Invalid when: ${JSON.stringify(raw["when"])}`);
   }
 
   return {
-    trigger: { tools, when: when.when, action: actionKind, targets, configDir, source },
+    trigger: { tools, when: when.when, action: actionKind, targets, excludes, configDir, source },
     diagnostics: [],
   };
+}
+
+/** Returns parsed patterns, or an error message when the entry is invalid. */
+function parseExcludes(value: unknown, action: ActionKind): string[] | string {
+  if (value === undefined) {
+    return [];
+  }
+  if (action !== "walkup") {
+    return "exclude is only valid on walkup triggers";
+  }
+  const patterns = parseStringList(value);
+  if (patterns === undefined || patterns.some((pattern) => pattern.startsWith("!"))) {
+    return "exclude patterns must be non-empty strings without a leading '!'";
+  }
+  return patterns;
 }
 
 function parseTools(value: unknown): ToolName[] | undefined {

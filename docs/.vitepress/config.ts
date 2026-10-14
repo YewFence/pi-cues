@@ -31,7 +31,10 @@ export default defineConfig({
           { text: '0005 Content-addressed dedup', link: '/adrs/0005-content-addressed-dedup' },
           { text: '0006 user_bash nextTurn', link: '/adrs/0006-user-bash-next-turn' },
           { text: '0007 Trust and boundaries', link: '/adrs/0007-trust-and-boundaries' },
-          { text: '0008 Builtin defaults', link: '/adrs/0008-builtin-defaults' }
+          { text: '0008 Builtin defaults', link: '/adrs/0008-builtin-defaults' },
+          { text: '0009 Project config under extensions', link: '/adrs/0009-project-config-under-extensions' },
+          { text: '0010 Walkup explicit trust gate', link: '/adrs/0010-walkup-explicit-trust-gate' },
+          { text: '0011 Walkup exclude', link: '/adrs/0011-walkup-exclude' }
         ]
       }
     ],

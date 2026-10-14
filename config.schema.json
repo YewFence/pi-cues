@@ -37,6 +37,20 @@
           "$ref": "#/definitions/ActionKind",
           "description": "skill: inject a pi skill (full text). file: inject a prompt file (truncated). walkup: collect context files up to the session cwd. inline: inject the target text itself."
         },
+        "exclude": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ],
+          "description": "walkup only: picomatch patterns matched against the collected file's path relative to the session cwd (POSIX separators). \"README.md\" matches only the cwd-level file; use a globstar pattern to match any depth. A leading bang (exclamation) prefix is rejected."
+        },
         "target": {
           "anyOf": [
             {

@@ -9,10 +9,11 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { loadConfig, type LoadedConfig } from "./config.js";
-import { matchAnyValue } from "./match.js";
+import { matchAnyValue, normalizePath } from "./match.js";
 import { extractCommands } from "./parse.js";
 import { extractToolPaths, pathBaseValues, toPathBases } from "./paths.js";
 import { loadSkillBlock, resolveSkill } from "./skills.js";
+import { effectiveTrustDecision, resolveAgentDir } from "./trust.js";
 import { formatFileBlock, type FileContent } from "./truncate.js";
 import {
   claimOnce,
@@ -31,6 +32,8 @@ import {
 
 export default function piCues(pi: ExtensionAPI): void {
   let config: LoadedConfig = { triggers: [], diagnostics: [], files: [], projectUntrusted: false };
+  let walkupAllowed = false;
+  let walkupTrustNote = "disabled (no trust decision)";
   const session: SessionState = createSessionState();
   const walkupCache: WalkupCache = createWalkupCache();
   /** Paths (and realpaths) pi already injected into the system prompt; rebuilt per run. */
@@ -39,14 +42,26 @@ export default function piCues(pi: ExtensionAPI): void {
   pi.on("session_start", (_event, ctx) => {
     clearSession(session);
     walkupCache.entries.clear();
+    const agentDir = resolveAgentDir();
     config = loadConfig({
       cwd: ctx.cwd,
-      homeDir: process.env["PI_CUES_HOME"],
+      agentDir,
       projectTrusted: typeof ctx.isProjectTrusted === "function" ? ctx.isProjectTrusted() : true,
     });
+    const decision = effectiveTrustDecision(ctx.cwd, agentDir);
+    walkupAllowed = decision === true;
+    walkupTrustNote =
+      decision === true
+        ? "enabled (trusted)"
+        : decision === false
+          ? "disabled (trust declined)"
+          : "disabled (no trust decision)";
     if (ctx.hasUI) {
       if (config.projectUntrusted) {
-        ctx.ui.notify("pi-cues: project not trusted, .pi/pi-cues.toml ignored", "warning");
+        ctx.ui.notify("pi-cues: project not trusted, config ignored", "warning");
+      }
+      if (!walkupAllowed) {
+        ctx.ui.notify(`pi-cues: walk-up collection ${walkupTrustNote}`, "warning");
       }
       for (const diagnostic of config.diagnostics) {
         ctx.ui.notify(`pi-cues: ${diagnostic.message} (${diagnostic.source})`, diagnostic.severity);
@@ -174,6 +189,9 @@ export default function piCues(pi: ExtensionAPI): void {
       }
 
       if (trigger.action === "walkup") {
+        if (!walkupAllowed) {
+          continue;
+        }
         for (const path of paths) {
           for (const file of collectContextFiles({
             anchorDir: cwd,
@@ -181,6 +199,9 @@ export default function piCues(pi: ExtensionAPI): void {
             fileNames: trigger.targets,
             cache: walkupCache,
           })) {
+            if (isExcluded(trigger.excludes, cwd, file.path)) {
+              continue;
+            }
             if (walkupSeen.has(file.realPath)) {
               continue;
             }
@@ -323,10 +344,18 @@ export default function piCues(pi: ExtensionAPI): void {
     session.diagnostics.push({ severity: "warning", source, message });
   }
 
+  function isExcluded(patterns: readonly string[], cwd: string, filePath: string): boolean {
+    if (patterns.length === 0) {
+      return false;
+    }
+    return matchAnyValue(patterns, [normalizePath(relative(cwd, filePath))]);
+  }
+
   function buildStatusText(): string {
     const lines = [
       `pi-cues: ${config.triggers.length} triggers from ${config.files.length} config file(s)`,
       ...config.files.map((file) => `  config: ${file}`),
+      `  walk-up: ${walkupTrustNote}`,
     ];
     // The schema ships inside the installed package: users can point their
     // editor's `#:schema` comment at this exact-version local copy. The

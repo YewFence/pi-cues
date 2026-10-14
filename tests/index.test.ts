@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -71,10 +71,14 @@ function setup(configToml: string | null, skillPaths: Record<string, string> = {
   const project = makeDir("pi-cues-it-project-");
   const home = makeDir("pi-cues-it-home-");
   if (configToml !== null) {
-    writeFile(join(project, ".pi", "pi-cues.toml"), configToml);
+    writeFile(join(project, ".pi", "extensions", "pi-cues", "config.toml"), configToml);
   }
+  writeFile(
+    join(home, ".pi", "agent", "trust.json"),
+    JSON.stringify({ [realpathSync(project)]: true }),
+  );
 
-  process.env["PI_CUES_HOME"] = home;
+  process.env["PI_CODING_AGENT_DIR"] = join(home, ".pi", "agent");
   const fake = createFakePi(skillPaths);
   piCues(fake.pi);
 
@@ -118,11 +122,11 @@ function injectedText(result: unknown): string | undefined {
 }
 
 beforeEach(() => {
-  process.env["PI_CUES_HOME"] = undefined;
+  process.env["PI_CODING_AGENT_DIR"] = undefined;
 });
 
 afterEach(() => {
-  delete process.env["PI_CUES_HOME"];
+  delete process.env["PI_CODING_AGENT_DIR"];
   for (const dir of dirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -179,7 +183,10 @@ describe("file cue", () => {
     const { fake, project, ctx } = setup(
       `version = 1\n[[triggers]]\ntools = ["read", "edit"]\nwhen.path = "mise.toml"\naction = "file"\ntarget = "./triggers/mise.md"\n`,
     );
-    writeFile(join(project, ".pi", "triggers", "mise.md"), "Mise conventions.");
+    writeFile(
+      join(project, ".pi", "extensions", "pi-cues", "triggers", "mise.md"),
+      "Mise conventions.",
+    );
     writeFile(join(project, "mise.toml"), "[tools]");
 
     const result = fake.handlers.get("tool_result")?.(editResult(join(project, "mise.toml")), ctx);
@@ -199,6 +206,58 @@ describe("walkup cue", () => {
       ctx,
     );
     expect(injectedText(result)).toContain("src rules");
+  });
+
+  it("collects nothing without an explicit trust decision", () => {
+    const project = makeDir("pi-cues-it-project-");
+    const home = makeDir("pi-cues-it-home-");
+    process.env["PI_CODING_AGENT_DIR"] = join(home, ".pi", "agent");
+    const fake = createFakePi();
+    piCues(fake.pi);
+    const ctx = { cwd: project, hasUI: true, ui: { notify: (m: string) => fake.notices.push(m) } };
+    fake.handlers.get("session_start")?.({ type: "session_start" }, ctx);
+    writeFile(join(project, "AGENTS.md"), "root agents");
+    writeFile(join(project, "a.ts"), "code");
+
+    const result = fake.handlers.get("tool_result")?.(editResult(join(project, "a.ts")), ctx);
+    expect(result).toBeUndefined();
+    expect(fake.notices.some((n) => n.includes("no trust decision"))).toBe(true);
+  });
+
+  it("collects nothing when the project trust decision is false", () => {
+    const project = makeDir("pi-cues-it-project-");
+    const home = makeDir("pi-cues-it-home-");
+    writeFile(
+      join(home, ".pi", "agent", "trust.json"),
+      JSON.stringify({ [realpathSync(project)]: false }),
+    );
+    process.env["PI_CODING_AGENT_DIR"] = join(home, ".pi", "agent");
+    const fake = createFakePi();
+    piCues(fake.pi);
+    const ctx = { cwd: project, hasUI: true, ui: { notify: (m: string) => fake.notices.push(m) } };
+    fake.handlers.get("session_start")?.({ type: "session_start" }, ctx);
+    writeFile(join(project, "AGENTS.md"), "root agents");
+    writeFile(join(project, "a.ts"), "code");
+
+    const result = fake.handlers.get("tool_result")?.(editResult(join(project, "a.ts")), ctx);
+    expect(result).toBeUndefined();
+    expect(fake.notices.some((n) => n.includes("trust declined"))).toBe(true);
+  });
+
+  it("skips walk-up files matching exclude patterns", () => {
+    const { fake, project, ctx } = setup(
+      `version = 1\n[[triggers]]\ntools = ["read", "edit"]\naction = "walkup"\ntarget = ["README.md"]\nexclude = "README.md"\n`,
+    );
+    writeFile(join(project, "README.md"), "root readme");
+    writeFile(join(project, "sub", "README.md"), "sub readme");
+    writeFile(join(project, "sub", "a.ts"), "code");
+
+    const text =
+      injectedText(
+        fake.handlers.get("tool_result")?.(editResult(join(project, "sub", "a.ts")), ctx),
+      ) ?? "";
+    expect(text).toContain("sub readme");
+    expect(text).not.toContain("root readme");
   });
 
   it("stays silent with defaults = false and no user walkup trigger", () => {
@@ -341,10 +400,10 @@ describe("trust and attribution", () => {
     const project = makeDir("pi-cues-it-project-");
     const home = makeDir("pi-cues-it-home-");
     writeFile(
-      join(project, ".pi", "pi-cues.toml"),
+      join(project, ".pi", "extensions", "pi-cues", "config.toml"),
       `version = 1\n[[triggers]]\ntools = ["bash"]\nwhen.command = "jj"\naction = "skill"\ntarget = "jj-cli"\n`,
     );
-    process.env["PI_CUES_HOME"] = home;
+    process.env["PI_CODING_AGENT_DIR"] = join(home, ".pi", "agent");
     const fake = createFakePi();
     piCues(fake.pi);
     const ctx = {

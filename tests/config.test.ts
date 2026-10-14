@@ -19,6 +19,11 @@ function makeTree(files: Record<string, string>): string {
   return root;
 }
 
+/** An empty agent dir for loadConfig's agentDir option. */
+function makeAgent(): string {
+  return join(makeTree({}), ".pi", "agent");
+}
+
 afterEach(() => {
   for (const dir of dirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
@@ -45,32 +50,26 @@ describe("loadConfig", () => {
   it("loads and merges global then project config", () => {
     // #given valid config at both levels #when loading #then triggers append, global first
     const home = makeTree({ ".pi/agent/pi-cues.toml": VALID });
-    const project = makeTree({ ".pi/pi-cues.toml": VALID });
-    const config = loadConfig({ cwd: project, homeDir: home });
+    const project = makeTree({ ".pi/extensions/pi-cues/config.toml": VALID });
+    const config = loadConfig({ cwd: project, agentDir: join(home, ".pi", "agent") });
     expect(config.files).toEqual([
       join(home, ".pi/agent/pi-cues.toml"),
-      join(project, ".pi/pi-cues.toml"),
+      join(project, ".pi/extensions/pi-cues/config.toml"),
     ]);
     expect(config.triggers).toHaveLength(5); // 2 global + 2 project + builtin default
     expect(config.triggers[0]?.source).toBe("<builtin defaults>");
     expect(config.diagnostics).toEqual([]);
   });
 
-  it("prefers pi-cues.toml over the nested extensions path at the same level", () => {
-    const project = makeTree({
-      ".pi/pi-cues.toml": VALID,
-      ".pi/extensions/pi-cues/config.toml": VALID.replace('target = "jj-cli"', 'target = "other"'),
-    });
-    const config = loadConfig({ cwd: project, homeDir: makeTree({}) });
-    expect(config.files).toEqual([join(project, ".pi/pi-cues.toml")]);
-    expect(
-      config.diagnostics.some((d) => d.severity === "warning" && d.source.endsWith("config.toml")),
-    ).toBe(true);
-    expect(config.triggers[1]?.targets).toEqual(["jj-cli"]);
+  it("ignores the legacy .pi/pi-cues.toml location", () => {
+    const project = makeTree({ ".pi/pi-cues.toml": VALID });
+    const config = loadConfig({ cwd: project, agentDir: makeAgent() });
+    expect(config.files).toEqual([]);
+    expect(config.diagnostics).toEqual([]);
   });
 
   it("ships a builtin walkup default when no config exists", () => {
-    const config = loadConfig({ cwd: makeTree({}), homeDir: makeTree({}) });
+    const config = loadConfig({ cwd: makeTree({}), agentDir: makeAgent() });
     expect(config.triggers).toHaveLength(1);
     expect(config.triggers[0]).toMatchObject({
       action: "walkup",
@@ -82,53 +81,53 @@ describe("loadConfig", () => {
 
   it("disables builtin defaults with `defaults = false` in either level", () => {
     const home = makeTree({ ".pi/agent/pi-cues.toml": "version = 1\ndefaults = false\n" });
-    const project = makeTree({ ".pi/pi-cues.toml": VALID });
-    const config = loadConfig({ cwd: project, homeDir: home });
+    const project = makeTree({ ".pi/extensions/pi-cues/config.toml": VALID });
+    const config = loadConfig({ cwd: project, agentDir: join(home, ".pi", "agent") });
     expect(config.triggers).toHaveLength(2);
     expect(config.triggers.every((t) => t.source !== "<builtin defaults>")).toBe(true);
   });
 
-  it("falls back to the nested path when pi-cues.toml is absent", () => {
+  it("loads project config from .pi/extensions/pi-cues/config.toml", () => {
     const project = makeTree({ ".pi/extensions/pi-cues/config.toml": VALID });
-    const config = loadConfig({ cwd: project, homeDir: makeTree({}) });
+    const config = loadConfig({ cwd: project, agentDir: makeAgent() });
     expect(config.files).toEqual([join(project, ".pi/extensions/pi-cues/config.toml")]);
     expect(config.triggers).toHaveLength(3); // builtin default + 2 configured
   });
 
   it("tolerates missing config files", () => {
-    const config = loadConfig({ cwd: makeTree({}), homeDir: makeTree({}) });
+    const config = loadConfig({ cwd: makeTree({}), agentDir: makeAgent() });
     expect(config.files).toEqual([]);
     expect(config.diagnostics).toEqual([]);
   });
 
   it("diagnoses invalid TOML and continues with other files", () => {
     const home = makeTree({ ".pi/agent/pi-cues.toml": "not [valid" });
-    const project = makeTree({ ".pi/pi-cues.toml": VALID });
-    const config = loadConfig({ cwd: project, homeDir: home });
+    const project = makeTree({ ".pi/extensions/pi-cues/config.toml": VALID });
+    const config = loadConfig({ cwd: project, agentDir: join(home, ".pi", "agent") });
     expect(config.diagnostics).toHaveLength(1);
     expect(config.diagnostics[0]?.severity).toBe("error");
     expect(config.triggers).toHaveLength(3); // builtin default + 2 from project
   });
 
   it("rejects a wrong version for the whole file", () => {
-    const project = makeTree({ ".pi/pi-cues.toml": "version = 99\n" });
-    const config = loadConfig({ cwd: project, homeDir: makeTree({}) });
+    const project = makeTree({ ".pi/extensions/pi-cues/config.toml": "version = 99\n" });
+    const config = loadConfig({ cwd: project, agentDir: makeAgent() });
     expect(config.triggers.map((t) => t.action)).toEqual(["walkup"]);
     expect(config.diagnostics[0]?.message).toContain("version");
   });
 
   it("skips entries whose when key does not fit tools", () => {
     const project = makeTree({
-      ".pi/pi-cues.toml": `version = 1\n[[triggers]]\ntools = ["bash"]\nwhen.path = "x"\naction = "file"\ntarget = "a.md"\n`,
+      ".pi/extensions/pi-cues/config.toml": `version = 1\n[[triggers]]\ntools = ["bash"]\nwhen.path = "x"\naction = "file"\ntarget = "a.md"\n`,
     });
-    const config = loadConfig({ cwd: project, homeDir: makeTree({}) });
+    const config = loadConfig({ cwd: project, agentDir: makeAgent() });
     expect(config.triggers.map((t) => t.source)).toEqual(["<builtin defaults>"]);
     expect(config.diagnostics[0]?.severity).toBe("warning");
   });
 
   it("rejects skill/file triggers without when but allows walkup", () => {
     const project = makeTree({
-      ".pi/pi-cues.toml": `version = 1
+      ".pi/extensions/pi-cues/config.toml": `version = 1
 [[triggers]]
 tools = ["bash"]
 action = "skill"
@@ -140,7 +139,7 @@ action = "walkup"
 target = "AGENTS.md"
 `,
     });
-    const config = loadConfig({ cwd: project, homeDir: makeTree({}) });
+    const config = loadConfig({ cwd: project, agentDir: makeAgent() });
     expect(config.triggers).toHaveLength(2);
     expect(config.triggers[1]?.action).toBe("walkup");
     expect(config.triggers[1]?.when).toBeUndefined();
@@ -148,18 +147,55 @@ target = "AGENTS.md"
 
   it("rejects walkup triggers listening to bash", () => {
     const project = makeTree({
-      ".pi/pi-cues.toml": `version = 1\n[[triggers]]\ntools = ["bash"]\naction = "walkup"\ntarget = "AGENTS.md"\n`,
+      ".pi/extensions/pi-cues/config.toml": `version = 1\n[[triggers]]\ntools = ["bash"]\naction = "walkup"\ntarget = "AGENTS.md"\n`,
     });
-    const config = loadConfig({ cwd: project, homeDir: makeTree({}) });
+    const config = loadConfig({ cwd: project, agentDir: makeAgent() });
     expect(config.triggers.map((t) => t.source)).toEqual(["<builtin defaults>"]);
+  });
+
+  it("parses exclude patterns on walkup triggers", () => {
+    const project = makeTree({
+      ".pi/extensions/pi-cues/config.toml": `version = 1\n[[triggers]]\ntools = ["read"]\naction = "walkup"\ntarget = "AGENTS.md"\nexclude = ["README.md", "**/NOTES.md"]\n`,
+    });
+    const config = loadConfig({ cwd: project, agentDir: makeAgent() });
+    expect(config.triggers[1]?.excludes).toEqual(["README.md", "**/NOTES.md"]);
+  });
+
+  it("defaults walkup excludes to an empty list and rejects exclude on other actions", () => {
+    const project = makeTree({
+      ".pi/extensions/pi-cues/config.toml": `version = 1
+[[triggers]]
+tools = ["read"]
+action = "walkup"
+target = "AGENTS.md"
+
+[[triggers]]
+tools = ["bash"]
+when.command = "jj"
+action = "skill"
+target = "jj-cli"
+exclude = "x.md"
+`,
+    });
+    const config = loadConfig({ cwd: project, agentDir: makeAgent() });
+    expect(config.triggers[1]?.excludes).toEqual([]);
+    expect(config.diagnostics.some((d) => d.message.includes("only valid on walkup"))).toBe(true);
+  });
+
+  it("rejects exclude patterns with a '!' prefix", () => {
+    const project = makeTree({
+      ".pi/extensions/pi-cues/config.toml": `version = 1\n[[triggers]]\ntools = ["read"]\naction = "walkup"\ntarget = "AGENTS.md"\nexclude = "!README.md"\n`,
+    });
+    const config = loadConfig({ cwd: project, agentDir: makeAgent() });
+    expect(config.diagnostics.some((d) => d.message.includes("'!'"))).toBe(true);
   });
 
   it("rejects project file targets escaping the config directory", () => {
     // #given a project config pointing outside itself #when loading #then the entry is rejected
     const project = makeTree({
-      ".pi/pi-cues.toml": `version = 1\n[[triggers]]\ntools = ["read"]\nwhen.path = "x"\naction = "file"\ntarget = "../../outside.md"\n`,
+      ".pi/extensions/pi-cues/config.toml": `version = 1\n[[triggers]]\ntools = ["read"]\nwhen.path = "x"\naction = "file"\ntarget = "../../outside.md"\n`,
     });
-    const config = loadConfig({ cwd: project, homeDir: makeTree({}) });
+    const config = loadConfig({ cwd: project, agentDir: makeAgent() });
     expect(config.triggers.map((t) => t.source)).toEqual(["<builtin defaults>"]);
     expect(config.diagnostics.some((d) => d.message.includes("escapes"))).toBe(true);
   });
@@ -168,22 +204,22 @@ target = "AGENTS.md"
     const home = makeTree({
       ".pi/agent/pi-cues.toml": `version = 1\n[[triggers]]\ntools = ["bash"]\nwhen.command = "jj"\naction = "file"\ntarget = "/shared/jj.md"\n`,
     });
-    const config = loadConfig({ cwd: makeTree({}), homeDir: home });
+    const config = loadConfig({ cwd: makeTree({}), agentDir: join(home, ".pi", "agent") });
     expect(config.triggers.some((t) => t.targets[0] === "/shared/jj.md")).toBe(true);
   });
 
   it("ignores project config when the project is untrusted", () => {
-    const project = makeTree({ ".pi/pi-cues.toml": VALID });
-    const config = loadConfig({ cwd: project, homeDir: makeTree({}), projectTrusted: false });
+    const project = makeTree({ ".pi/extensions/pi-cues/config.toml": VALID });
+    const config = loadConfig({ cwd: project, agentDir: makeAgent(), projectTrusted: false });
     expect(config.triggers.map((t) => t.source)).toEqual(["<builtin defaults>"]);
     expect(config.projectUntrusted).toBe(true);
     expect(config.diagnostics.some((d) => d.message.includes("not trusted"))).toBe(true);
   });
 
   it("normalizes target to a list and records the config dir", () => {
-    const project = makeTree({ ".pi/pi-cues.toml": VALID });
-    const config = loadConfig({ cwd: project, homeDir: makeTree({}) });
+    const project = makeTree({ ".pi/extensions/pi-cues/config.toml": VALID });
+    const config = loadConfig({ cwd: project, agentDir: makeAgent() });
     expect(config.triggers[1]?.targets).toEqual(["jj-cli"]);
-    expect(config.triggers[1]?.configDir).toBe(join(project, ".pi"));
+    expect(config.triggers[1]?.configDir).toBe(join(project, ".pi", "extensions", "pi-cues"));
   });
 });

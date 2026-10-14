@@ -49,7 +49,7 @@ version = 1
 
 The schema is generated from the `RawConfig` types in `src/piCues/types.ts`; `tests/schema.test.ts` fails when the two drift apart.
 
-Create `.pi/pi-cues.toml` in your project (or `~/.pi/agent/pi-cues.toml` globally; the two are appended, global baseline first):
+Create `.pi/extensions/pi-cues/config.toml` in your project (or `~/.pi/agent/pi-cues.toml` globally; the two are appended, global baseline first). The project file lives under `.pi/extensions/` on purpose: that directory is one of pi's trust-requiring resources, so pi asks for project trust before a cloned repository can ship any pi-cues config, and an untrusted project's config is withheld:
 
 ```toml
 version = 1
@@ -80,11 +80,18 @@ target = "Write commit messages in Chinese."
 tools = ["read", "edit", "write"]
 action = "walkup"
 target = ["AGENTS.md", "CLAUDE.md"]
+
+# Walkup can drop collected files by pattern: matched against the collected
+# file's path relative to the session cwd (POSIX separators). "README.md"
+# matches only the cwd-level file; a globstar pattern matches any depth.
+exclude = ["README.md"]
 ```
 
 Each target fires at most once per session (reset on compaction). `/cues status` shows the loaded config, diagnostics, and what has fired.
 
 Out of the box, pi-cues ships one builtin trigger: every read/edit/write walks up to the session cwd collecting `AGENTS.md` (deduplicated against pi's natively loaded context files). Add `defaults = false` to any config file to disable it.
+
+Walk-up collection — builtin and configured — only runs for projects with an explicit trusted decision in pi's `trust.json` (`/trust` records one). Undecided and declined projects collect nothing: pi's `isProjectTrusted()` reports true for projects without trust-requiring resources regardless of saved decisions (see [pi#10947](https://github.com/earendil-works/pi/issues/10947)), so the store file is the only reliable source. `/cues status` shows the current walk-up trust state.
 
 The package also bundles the `pi-cues-authoring` skill, which teaches the agent how to author context for pi-cues (form choice, location-as-scope, wiring discipline).
 
