@@ -27,10 +27,35 @@ mise run deps:install
 mise run build
 ```
 
-### Usage
+### Configuration
 
-> [!IMPORTANT]
-> [PLACEHOLDER] Add the primary usage examples for this project.
+Create `.pi/pi-cues.toml` in your project (or `~/.pi/agent/pi-cues.toml` globally; the two are appended, global baseline first):
+
+```toml
+version = 1
+
+# Running `jj ...` loads the jj-cli skill once per session
+[[triggers]]
+tools = ["bash"]
+when.command = "jj"
+action = "skill"
+target = "jj-cli"
+
+# Reading or editing a test file injects a prompt file (relative to the config directory)
+[[triggers]]
+tools = ["read", "edit"]
+when.path = "src/**/*.test.ts"
+action = "file"
+target = "./triggers/vitest.md"
+
+# Any path operation walks up to the session cwd collecting context files
+[[triggers]]
+tools = ["read", "edit", "write"]
+action = "walkup"
+target = ["AGENTS.md", "CLAUDE.md"]
+```
+
+Each target fires at most once per session (reset on compaction). `/cues status` shows the loaded config, diagnostics, and what has fired.
 
 ## Development
 

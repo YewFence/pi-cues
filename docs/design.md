@@ -20,7 +20,7 @@
 **目标**
 
 1. 两条触发管道：bash 命令启发式解析提取命令名；read/edit/write 工具事件提取操作路径
-2. 中央 trigger 表按 `tools` + `when` 谓词匹配，动作分三类：`skill` 交给 pi 原生 skill 能力加载；`file` 自己读取提示词文件注入正文；`walkup` 沿用 pi-rules 的 walk-up 上下文加载（对被操作文件从其目录向上收集 AGENTS.md 等上下文文件，与 pi 原生 `contextFiles` 去重后注入）
+2. 中央 trigger 表按 `tools` + `when` 谓词匹配，动作分三类：`skill` 经 pi 原生发现定位 SKILL.md 后自读全文注入；`file` 自己读取提示词文件注入正文；`walkup` 沿用 pi-rules 的 walk-up 上下文加载（对被操作文件从其目录向上收集 AGENTS.md 等上下文文件，与 pi 原生 `contextFiles` 去重后注入）
 3. 会话级去重：每个加载目标只触发一次；compaction 后重置
 4. 触发与注入契约参考 pi-rules：`tool_result` 返回新数组不就地突变、会话去重、正文截断预算
 
@@ -29,7 +29,7 @@
 - 完整 bash 语法分析（命令替换、heredoc、函数定义内的调用一律尽力而为）
 - 自动发现 SKILL 与 CLI 的关联（映射表由用户维护，保持确定性）
 - `.pi/rules` 目录发现 / frontmatter globs / rule 文件排序模型（pi-rules 的主体；本扩展用中央 trigger 表 + walkup action 覆盖其实用部分）
-- repo root / 项目根检测（walk-up 边界锚定配置文件所在目录，见下文；将来真有需要再引入）
+- repo root / 项目根检测（walk-up 边界锚定 `ctx.cwd`，见下文；将来真有需要再引入）
 - `file` 动作的 frontmatter 解析（提示词文件就是纯正文，不认任何元数据）
 - 多配置文件发现与合并（远期计划：当前只有一个配置文件，路径语义已为"相对配置文件所在目录"预留了多文件合并的演进空间）
 
@@ -47,7 +47,7 @@ flowchart LR
     D -- 是 --> E{"会话内已触发\n该目标?"}
     E -- 是 --> X
     E -- 否 --> F{"action"}
-    F -- skill --> G["pi 原生 skill 加载"]
+    F -- skill --> G["自读 SKILL.md\n剥 frontmatter 全文注入"]
     F -- file --> H["读取提示词文件\n截断后注入正文"]
     F -- walkup --> H2["walk-up 收集上下文文件\n查缓存/去重后注入"]
     G --> I["记录去重"]
@@ -59,20 +59,22 @@ flowchart LR
 
 - `tool_result`（`toolName === "bash"`）：从 `event.input.command` 取命令串，走命令提取管道
 - `tool_result`（`toolName` 为 `read`/`edit`/`write`）：从 `event.details.filePath` / `event.input.path` 提取路径，走路径管道
-- `user_bash`：用户手动跑的 bash 命令，走命令提取管道
+- `user_bash`：用户手动跑的 bash 命令，走命令提取管道。handler 必须永不抛出（`user_bash` handler 失败会**阻断用户命令**执行），全部逻辑包在 try/catch 里兜底
+
+`user_bash` 的注入出口与 `tool_result` 不同：`UserBashEventResult` 只有 `{operations}` / `{result}` 两个接管执行的分支，没有附加内容的通道，返回 `undefined` 就是纯观察。且事件在命令**执行前**触发，立即 `sendMessage` 会打断进行中的 agent turn。因此 user_bash 命中的 cue **记为 pending，在下一次模型请求前用 `pi.sendMessage()` 发出**（去重 Set 在命中时即记，语义与 tool_result 管道一致）。`excludeFromContext` 为 true（`!!` 前缀）的命令**不触发**——命令本身不进上下文，注入的 cue 会成为无源之水。
 
 两条管道只负责产出「待匹配字符串」——命令管道出 basename 列表，路径管道出多 base（projectRelative / scopeRelative / basename）——之后汇入同一套 `tools` + `when` 匹配与去重状态机。失败的 bash 调用（`isError: true`）也触发：失败的 `jj` 调用恰恰说明模型需要 SKILL。
 
-**skill 动作的注入形式待定**：参考 [`@zigai/pi-mention-skill`](https://github.com/zigai/pi-tweaks)（npm 0.11.0，把 skill 发现从 slash 命令移到 `$` 提及）。之后评估它的加载方式（具体调用了哪个 pi API、以什么形式进上下文），再决定本扩展用 `pi.sendUserMessage("/skill:name")` 还是更底层的接口。`file` 动作没有待定项：直接沿 pi-rules 的 `tool_result` 契约注入截断后的正文。
+**skill 动作的注入形式（已定）**：评估过 [`@zigai/pi-mention-skill`](https://github.com/zigai/pi-tweaks) 源码后确定——发现沿用 pi 原生实现：`pi.getCommands()` 过滤 `source === "skill"`（命令名带 `skill:` 前缀，剥掉后与 target 比对），从 `sourceInfo.path` 拿到 SKILL.md 路径。这样 target 与 `/skill:name` 看到的是同一份解析结果，同名冲突按 pi「先发现者胜」规则天然消歧，不自己扫目录。加载则自己做：读文件、剥 frontmatter、拼 pi 原生强制加载同款格式注入：`<skill name="..." location="...">References are relative to {baseDir}.\n\n{body}</skill>`。不用 `pi.sendUserMessage("/skill:name")`：斜杠展开是 TUI/RPC 输入管道的特性，程序化发送不保证展开。skill 正文**全文注入、不过截断预算**，对齐 pi 原生 `/skill:name` 语义；`file` 动作沿 pi-rules 的 `tool_result` 契约注入截断后的正文。
 
 ## 配置文件
 
 路径规范与其他扩展一致，项目级和全局级：
 
-- 项目：`./.pi/extensions/pi-cues/config.toml` **或** `./.pi/pi-cues-config.toml`（二选一，待定）
-- 全局：`~/.pi/` 下同路径
+- 项目：`./.pi/pi-cues.toml`（优先）**或** `./.pi/extensions/pi-cues/config.toml`——同级同时存在时只用 `pi-cues.toml`，另一个记 diagnostic；pi 的惯例是 `.pi/` 下每种资源一个扁平条目（`.pi/settings.json`、`.pi/mcp.json`），`pi-cues.toml` 因此是首选
+- 全局：`~/.pi/agent/` 下同路径（agent 目录，非 `~/.pi/`）
 
-解析顺序倾向**全局提供基线、项目级覆盖合并**（而非 first-match 丢弃），具体看其他扩展的惯例再定。
+合并语义：**全局提供基线、项目级追加合并**。trigger 是匿名列表、没有可做覆盖键的标识，追加是唯一不引入额外概念的语义；会话去重 Set 天然吸收重复项。
 
 ### Schema
 
@@ -81,7 +83,7 @@ flowchart LR
 ```toml
 version = 1
 
-# bash 命令 → SKILL（pi 原生加载）
+# bash 命令 → SKILL（自读全文注入）
 [[triggers]]
 tools = ["bash"]
 when.command = "jj"
@@ -121,11 +123,11 @@ target = ["AGENTS.md", "CLAUDE.md", "CONTEXT.md"]
 - `tools`：本条 trigger 监听哪些工具事件。决定 `when` 里能出现哪些键（`bash` → `command`；`read`/`edit`/`write` → `path`）
 - `when`：谓词子表，键名自带语义判别。首版两个键：`command`（匹配提取出的命令 basename，无通配符时为精确匹配）、`path`（匹配操作路径，走 picomatch glob）。未来可扩多键 AND 复合条件（如 `when.args`），不用改 schema
 - `action`：`skill`、`file` 或 `walkup`
-- `target`：`skill` 动作时是 skill 名，交给 pi 原生解析（目录查找、frontmatter 全不自己做）；`file` 动作时是提示词文件路径；`walkup` 动作时是上下文文件名列表（string 或 string[]）。`target` 允许 string | array 不是 walkup 特例——`skill` 动作一条触发加载多个 SKILL 本来就是自然泛化
+- `target`：`skill` 动作时是 skill 名（不带 `skill:` 前缀），经 `pi.getCommands()` 解析为 SKILL.md 路径（目录查找与冲突消歧全是 pi 原生行为）；`file` 动作时是提示词文件路径；`walkup` 动作时是上下文文件名列表（string 或 string[]）。`target` 允许 string | array 不是 walkup 特例——`skill` 动作一条触发加载多个 SKILL 本来就是自然泛化
 
 **`file` target 的路径基准相对配置文件所在目录解析**。符合直觉——正常人把配置放项目根，target 写相对路径即指向项目内文件；也为远期多文件配置合并预留了稳定语义（每份配置引用自己身边的文件，合并时天然无歧义）。
 
-校验：按 `version` 字段校验；`tools` 与 `when` 键不匹配（如 `tools = ["bash"]` 却写了 `when.path`）、`action`/`target` 缺失等记 diagnostics（`/rules status` 风格的 slash 命令可后加）。`walkup` 动作允许省略 `when`——缺省即匹配所有事件，正是「任意路径操作都触发 walk-up」的常见用法；配 `when.path` glob 则得到作用域表达力（如只在改 `src/**` 时 walk-up、用 `!**/*.test.ts` 排除测试文件）。
+校验：按 `version` 字段校验；`tools` 与 `when` 键不匹配（如 `tools = ["bash"]` 却写了 `when.path`）、`action`/`target` 缺失等**无效条目记 diagnostics 后跳过，其余条目正常生效**（对齐 pi 对 skill 的宽容态度，单条笔误不致全配置失效）。diagnostics 有两个出口：`session_start` 时用 `ctx.ui.notify` 报告配置错误（交互模式即时可见），以及 `/cues [status]` 斜杠命令按需查看（配置 diagnostics、运行时缺失记录、本会话已触发的去重清单；裸 `/cues` 即 `/cues status`，为后续子命令预留空间）。运行时 target 缺失（skill 名在 `getCommands()` 里找不到、file 路径不存在）**静默跳过并记 diagnostic，且同样记入去重 Set**——避免每条命令重复诊断，也不把配置问题泄漏进模型上下文。`walkup` 动作允许省略 `when`——缺省即匹配所有事件，正是「任意路径操作都触发 walk-up」的常见用法；配 `when.path` glob 则得到作用域表达力（如只在改 `src/**` 时 walk-up、用 `!**/*.test.ts` 排除测试文件）。**仅 walkup 可省略 when**：`skill`/`file` 省略 when 记 diagnostic 并跳过该条目——如 `tools = ["bash"]` 忘写 `when.command` 会导致每条 bash 命令都触发注入，几乎一定是笔误。
 
 ## 命令提取（bash 管道）
 
@@ -142,13 +144,17 @@ target = ["AGENTS.md", "CLAUDE.md", "CONTEXT.md"]
 **提取算法**（对每个简单命令）：
 
 1. 用 `shell-quote` 的 `parse()` 拆词，按操作符 token 切出简单命令序列；heredoc、`$()`、反引号内容整体跳过（解析失败时静默放弃整条命令，不触发不报错）
-2. 剥前缀形如 `NAME=value` 的环境赋值 token
-3. 剥一层已知包装器（保持小集合、可配置）：`sudo`、`env`、`npx`、`bunx`、`uv run`、`mise x`、`mise run`
+2. 剥前缀形如 `NAME=value` 的环境赋值 token——spike 已验证 `parse()` 输出中赋值是纯字符串 token（如 `"FOO=1"`），用 `/^[A-Za-z_]\w*=/` 判别即可
+3. 剥一层已知包装器（小集合**硬编码**，首版不可配置；真有需求再加，默认即此集合向后兼容容易）：`sudo`、`env`、`npx`、`bunx`、`uv run`、`mise x`、`mise run`
 4. 取剩余首 token 的 `basename()`，与命中 `bash` 的 trigger 的 `when.command` 比对（大小写敏感，无通配符即精确匹配）
 
 管道两侧（`jj log | rg foo`）都会提取，因此 `jj` 和 `rg` 各自可触发；同一条命令多次出现同一命令只记一次。
 
-**待验证项**：`shell-quote` `parse()` 对 `FOO=1 cmd` 这类赋值 token 的具体输出形状（是独立对象还是粘连词），实现前先写个 spike 脚本确认，再定第 2 步的匹配写法。
+**spike 结论（已验证，`scripts/spike-shell-quote.mjs`）**：
+
+- 操作符是 `{op: "..."}` 对象。切分简单命令的分隔集**仅** `|`、`||`、`&&`、`;`——`>`、`>>`、`<<`、`>&` 等重定向也是 op 但**不能**当分隔符，否则 `jj log > out.txt` 的 `out.txt` 会被误当命令名
+- `$(...)` 内容落在 `{op:"("}`…`{op:")"}` 之间，深度跟踪整段跳过即可；heredoc 正文在 parse 输出里退化为普通参数 token，天然不会误触发
+- `parse()` 几乎不抛异常（未闭合引号如 `'unclosed` 也返回 `["unclosed"]`），算法第 1 步的"解析失败静默放弃"是防御性分支，正常路径走不到
 
 ## 路径提取（path 管道）
 
@@ -164,7 +170,7 @@ target = ["AGENTS.md", "CLAUDE.md", "CONTEXT.md"]
 
 pi-rules 的内置能力之一：编辑某文件时，从该文件所在目录逐层向上收集 AGENTS.md 等上下文文件注入，并和 pi 原生 system prompt 的 `contextFiles` 去重（原生已加载的不重复注入）。作为 action 而非特判全局开关，理由：引擎层（遍历、排序、去重）本就不可声明化，可配置层（监听哪些工具、哪些文件名、作用域限定）完全能被 trigger 表达，且自带作用域表达力——无特判代码路径，概念统一。
 
-**walk-up 边界锚定配置文件所在目录**（不做 repo root / 项目根检测）：从被操作文件所在目录向上走到配置目录为止；被操作文件不在配置目录子树下时，只检查配置目录本身。不引入 repo root 判断是刻意简化——路径基准已经统一在配置目录，walk 边界用同一锚点语义一致；将来真有 monorepo 跨仓库需求再评估。每层检查 `target` 声明的文件名列表，按近→远顺序注入。
+**walk-up 边界锚定 `ctx.cwd`**（会话工作目录，不做 repo root / 项目根检测）：从被操作文件所在目录向上走到 cwd 为止；被操作文件不在 cwd 子树下时，只检查 cwd 本身。曾考虑锚定配置文件所在目录，但 `.pi/pi-cues.toml` 形态下配置目录是 `.pi/`，项目根的 AGENTS.md 永远收集不到、全局配置锚点更是落在 `~/.pi/agent`——核心用例整个失效。cwd 对全局/项目配置语义一致，与路径匹配的 projectRelative base 同一基准，也不引入 repo root 检测；将来真有 monorepo 跨仓库需求再评估。每层检查 `target` 声明的文件名列表，按近→远顺序注入。
 
 ### 会话态 walk-up 缓存
 
@@ -173,7 +179,7 @@ pi-rules 的做法（`engine.ts`）是每次 `tool_result` 都重新发现，用
 ```text
 sessionWalkupCache: Map<targetDir, {
   walkDirs: string[],                       // 预先算好的 walk 目录序列（近→远）
-  files: { path, realPath, statFingerprint }[],  // 每层的目标文件名命中
+  files: { path, realPath, statFingerprint }[],  // 每层每个候选文件名的 stat（missing 也记录）
 }>
 ```
 
@@ -184,7 +190,7 @@ sessionWalkupCache: Map<targetDir, {
 
 ## 去重与状态
 
-- 会话级 `Set<string>`，key 为 `action + 解析后的 target`：`file` 用相对配置目录解析出的绝对路径；`skill` 用 skill 名；`walkup` 用「配置目录 realPath + 文件名列表排序」拼出的稳定键（同目录同文件名列表只加载一次）。多个 trigger 指向同一目标时只加载一次（参考 pi-rules 的 `injectedSingleFileRules` 模式）
+- 会话级 `Set<string>`，key 为 `action + 解析后的 target`：`file` 用相对配置目录解析出的绝对路径；`skill` 用 skill 名；`walkup` 用「cwd realPath + 文件名列表排序」拼出的稳定键（同锚点同文件名列表只加载一次，且仅在确有文件注入时才记键——首次事件没收集到任何文件不占位，后续目录的上下文文件仍有机会注入）。多个 trigger 指向同一目标时只加载一次（参考 pi-rules 的 `injectedSingleFileRules` 模式）
 - `session_start`、`session_compact`、`/reload` 时清空（compact 后旧上下文已压缩，重新触发是对的）
 - 若 pi 原生 skill 加载自带幂等（如已加载 skill 不重复进上下文），去重仍保留——避免依赖内部实现细节
 
@@ -209,12 +215,13 @@ sessionWalkupCache: Map<targetDir, {
 ```text
 pi-cues/
 ├── src/
-│   ├── index.ts        # 工厂函数：注册 tool_result / user_bash 钩子
+│   ├── index.ts        # 工厂函数：注册 tool_result / user_bash 钩子 + /cues 命令
 │   ├── parse.ts        # shell-quote 封装 + 命令名提取（纯逻辑）
 │   ├── paths.ts        # read/edit/write 路径提取 + 多 base 生成
-│   ├── config.ts       # TOML 读取 + 项目/全局合并 + 校验 diagnostics
+│   ├── config.ts       # TOML 读取 + 项目/全局追加合并 + 校验 diagnostics
 │   ├── match.ts        # picomatch 封装 + trigger 匹配
-│   ├── load.ts         # skill 动作（调 pi 原生）+ file 动作（读取截断）+ walkup 动作（发现收集）
+│   ├── skills.ts       # skill 发现：pi.getCommands() 过滤 skill 命令，skill 名 → SKILL.md 路径
+│   ├── inject.ts       # file/skill 共用的读取注入管道（file 过截断，skill 全文）+ walkup 注入
 │   ├── walkup.ts       # walk-up 目录序列生成 + 会话态发现缓存
 │   └── triggers.ts     # 去重状态机
 ├── test/               # vitest，参考 pi-rules 的 temp-fs + 可注入 home dir 手法
@@ -227,14 +234,14 @@ pi-cues/
 
 - `parse.test.ts`：引用/转义、`&&`/`;`/管道、环境赋值前缀、包装器、basename、解析失败静默
 - `paths.test.ts`：read/edit/write 各输入字段、相对路径 resolve、多 base 生成
-- `config.test.ts`：项目/全局合并优先级、缺失容忍、`tools`/`when` 键不匹配等校验 diagnostics、target 相对配置目录解析
+- `config.test.ts`：项目/全局追加合并、同级双路径 `pi-cues.toml` 优先、缺失容忍、`tools`/`when` 键不匹配等校验 diagnostics、target 相对配置目录解析
 - `match.test.ts`：命令精确匹配、路径 glob 三 base、负向排除
 - `triggers.test.ts`：会话内去重、多 trigger 同目标只加载一次、compaction 重置
-- `load.test.ts`：`file` 动作读取 + 截断预算；`walkup` 动作多层目录收集、近→远顺序、与 `contextFiles` 去重
+- `load.test.ts`（即 inject/skills）：`file` 动作读取 + 截断预算；`skill` 动作全文注入不截断、getCommands 发现的 `skill:` 前缀剥离与缺名处理；`walkup` 动作多层目录收集、近→远顺序、与 `contextFiles` 去重
 - `walkup.test.ts`：边界锚定配置目录、目标文件在子树外只查配置目录、会话态缓存命中与 stat 指纹失效（含 missing→exists 转变）、compaction 重置
+- `index.test.ts`（集成）：user_bash 命中后 pending 注入在下一次模型请求前发出、`!!` 前缀不触发、`/cues status` 输出 diagnostics 与去重清单
 - 集成测试：临时 fs + 可注入 home dir，命名沿用 `#given X #when Y #then Z`
 
 ## 开放问题
 
-1. **pi 原生 skill 加载的扩展 API 入口**：`pi.sendUserMessage("/skill:name")` 是否等价于用户手敲？有没有更直接的编程接口？——评估 pi-mention-skill 源码时一并确认
-2. 多行脚本（`bash -c`、heredoc 写脚本）：首版只处理顶层简单命令，嵌套内容跳过
+无。原开放问题 1（skill 加载 API）已通过 pi-mention-skill 源码评估解决（见"总体设计"skill 注入形式）；原问题 2（多行脚本）按既定非目标处理，启发式尽力而为。

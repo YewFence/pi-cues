@@ -11,7 +11,8 @@
     "url": "git+https://github.com/YewFence/pi-cues.git"
   },
   "files": [
-    "dist"
+    "dist",
+    "NOTICE"
   ],
   "type": "module",
   "exports": {
@@ -23,12 +24,23 @@
   "scripts": {
     "test": "vitest --run"
   },
+  "dependencies": {
+    "picomatch": "^4.0.7",
+    "shell-quote": "^1.12.0",
+    "smol-toml": "^1.9.1"
+  },
   "devDependencies": {
+    "@earendil-works/pi-coding-agent": "1.1.0",
     "@types/node": "^26.6.5",
+    "@types/picomatch": "^4.0.3",
+    "@types/shell-quote": "^1.7.5",
     "oxfmt": "^0.72.0",
     "oxlint": "^1.88.0",
     "tsdown": "^0.23.1",
     "typescript": "^7.0.2",
     "vitest": "^5.0.4"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
   }
 }

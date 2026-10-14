@@ -1,7 +1,287 @@
-import { greet } from "../src/piCues/index.js";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-describe("greet", () => {
-  it("greets by name", () => {
-    expect(greet("world")).toBe("Hello, world!");
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+
+import piCues from "../src/piCues/index.js";
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
+interface FakePi {
+  pi: ExtensionAPI;
+  handlers: Map<string, (event: any, ctx: any) => unknown>;
+  sent: Array<{ message: any; options: any }>;
+  commands: Map<string, { handler: (args: string, ctx: any) => Promise<void> }>;
+  notices: string[];
+}
+
+function createFakePi(skillPaths: Record<string, string> = {}): FakePi {
+  const fake: FakePi = {
+    handlers: new Map(),
+    sent: [],
+    commands: new Map(),
+    notices: [],
+    pi: {
+      on: (event: string, handler: any) => {
+        fake.handlers.set(event, handler);
+        return () => {};
+      },
+      registerCommand: (name: string, def: any) => {
+        fake.commands.set(name, def);
+      },
+      sendMessage: (message: any, options: any) => {
+        fake.sent.push({ message, options });
+      },
+      getCommands: () =>
+        Object.entries(skillPaths).map(([name, path]) => ({
+          name: `skill:${name}`,
+          description: name,
+          source: "skill",
+          sourceInfo: { path, source: "test", scope: "user", origin: "top-level" },
+        })),
+    } as unknown as ExtensionAPI,
+  };
+  return fake;
+}
+
+const dirs: string[] = [];
+
+function makeDir(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  dirs.push(dir);
+  return dir;
+}
+
+function writeFile(path: string, content: string): void {
+  mkdirSync(join(path, ".."), { recursive: true });
+  writeFileSync(path, content);
+}
+
+interface Fixture {
+  fake: FakePi;
+  project: string;
+  home: string;
+  ctx: any;
+}
+
+function setup(configToml: string, skillPaths: Record<string, string> = {}): Fixture {
+  const project = makeDir("pi-cues-it-project-");
+  const home = makeDir("pi-cues-it-home-");
+  writeFile(join(project, ".pi", "pi-cues.toml"), configToml);
+
+  process.env["PI_CUES_HOME"] = home;
+  const fake = createFakePi(skillPaths);
+  piCues(fake.pi);
+
+  const ctx = {
+    cwd: project,
+    hasUI: true,
+    ui: { notify: (message: string) => fake.notices.push(message) },
+  };
+  fake.handlers.get("session_start")?.({ type: "session_start" }, ctx);
+  return { fake, project, home, ctx };
+}
+
+function bashResult(command: string, isError = false): any {
+  return {
+    type: "tool_result",
+    toolCallId: "1",
+    toolName: "bash",
+    input: { command },
+    content: [{ type: "text", text: "output" }],
+    details: undefined,
+    isError,
+  };
+}
+
+function editResult(filePath: string): any {
+  return {
+    type: "tool_result",
+    toolCallId: "2",
+    toolName: "edit",
+    input: { path: filePath },
+    content: [{ type: "text", text: "edited" }],
+    details: { filePath },
+    isError: false,
+  };
+}
+
+function injectedText(result: unknown): string | undefined {
+  const content = (result as { content?: Array<{ type: string; text?: string }> } | undefined)
+    ?.content;
+  return content?.at(-1)?.text;
+}
+
+beforeEach(() => {
+  process.env["PI_CUES_HOME"] = undefined;
+});
+
+afterEach(() => {
+  delete process.env["PI_CUES_HOME"];
+  for (const dir of dirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+describe("skill cue", () => {
+  it("injects the skill block on a matching bash command, once per session", () => {
+    // #given jj → jj-cli trigger #when `jj log` runs twice #then one injection
+    const skillPath = join(makeDir("pi-cues-it-skill-"), "SKILL.md");
+    writeFile(skillPath, "---\nname: jj-cli\n---\n\nJJ body.");
+    const { fake, ctx } = setup(
+      `version = 1\n[[triggers]]\ntools = ["bash"]\nwhen.command = "jj"\naction = "skill"\ntarget = "jj-cli"\n`,
+      { "jj-cli": skillPath },
+    );
+
+    const handler = fake.handlers.get("tool_result");
+    const first = handler?.(bashResult("jj log"), ctx);
+    expect(injectedText(first)).toContain('<skill name="jj-cli"');
+    expect(injectedText(first)).toContain("JJ body.");
+
+    const second = handler?.(bashResult("jj log"), ctx);
+    expect(second).toBeUndefined();
+  });
+
+  it("also fires for failed bash calls", () => {
+    const skillPath = join(makeDir("pi-cues-it-skill-"), "SKILL.md");
+    writeFile(skillPath, "body");
+    const { fake, ctx } = setup(
+      `version = 1\n[[triggers]]\ntools = ["bash"]\nwhen.command = "jj"\naction = "skill"\ntarget = "jj-cli"\n`,
+      { "jj-cli": skillPath },
+    );
+    expect(
+      injectedText(fake.handlers.get("tool_result")?.(bashResult("jj bad-flag", true), ctx)),
+    ).toContain('<skill name="jj-cli"');
+  });
+
+  it("records a diagnostic and dedups when the skill is missing", () => {
+    const { fake, ctx } = setup(
+      `version = 1\n[[triggers]]\ntools = ["bash"]\nwhen.command = "jj"\naction = "skill"\ntarget = "ghost"\n`,
+    );
+    const handler = fake.handlers.get("tool_result");
+    expect(handler?.(bashResult("jj st"), ctx)).toBeUndefined();
+    expect(handler?.(bashResult("jj log"), ctx)).toBeUndefined();
+
+    const status = fake.commands.get("cues");
+    void status?.handler("status", ctx);
+    expect(fake.notices.at(-1)).toContain("Skill not found or unreadable: ghost");
+    expect(fake.notices.at(-1)?.match(/Skill not found/g)).toHaveLength(1);
+  });
+});
+
+describe("file cue", () => {
+  it("injects a prompt file for a matching path, resolved relative to the config dir", () => {
+    const { fake, project, ctx } = setup(
+      `version = 1\n[[triggers]]\ntools = ["read", "edit"]\nwhen.path = "mise.toml"\naction = "file"\ntarget = "./triggers/mise.md"\n`,
+    );
+    writeFile(join(project, ".pi", "triggers", "mise.md"), "Mise conventions.");
+    writeFile(join(project, "mise.toml"), "[tools]");
+
+    const result = fake.handlers.get("tool_result")?.(editResult(join(project, "mise.toml")), ctx);
+    expect(injectedText(result)).toContain("Mise conventions.");
+  });
+});
+
+describe("walkup cue", () => {
+  it("collects context files near to far and skips native ones", () => {
+    const { fake, project, ctx } = setup(
+      `version = 1\n[[triggers]]\ntools = ["read", "edit", "write"]\naction = "walkup"\ntarget = "AGENTS.md"\n`,
+    );
+    writeFile(join(project, "AGENTS.md"), "root rules");
+    writeFile(join(project, "src", "AGENTS.md"), "src rules");
+    writeFile(join(project, "src", "a.ts"), "code");
+
+    // #given pi natively loaded the root AGENTS.md
+    fake.handlers.get("before_agent_start")?.(
+      {
+        type: "before_agent_start",
+        systemPromptOptions: { contextFiles: [{ path: join(project, "AGENTS.md") }] },
+      },
+      ctx,
+    );
+
+    const result = fake.handlers.get("tool_result")?.(
+      editResult(join(project, "src", "a.ts")),
+      ctx,
+    );
+    const text = injectedText(result);
+    expect(text).toContain("src rules");
+    expect(text).not.toContain("root rules");
+  });
+
+  it("does not burn the once-per-session slot when nothing is found", () => {
+    const { fake, project, ctx } = setup(
+      `version = 1\n[[triggers]]\ntools = ["edit"]\naction = "walkup"\ntarget = "AGENTS.md"\n`,
+    );
+    writeFile(join(project, "empty", "a.ts"), "code");
+    writeFile(join(project, "full", "b.ts"), "code");
+
+    const handler = fake.handlers.get("tool_result");
+    expect(handler?.(editResult(join(project, "empty", "a.ts")), ctx)).toBeUndefined();
+
+    writeFile(join(project, "full", "AGENTS.md"), "late rules");
+    const result = handler?.(editResult(join(project, "full", "b.ts")), ctx);
+    expect(injectedText(result)).toContain("late rules");
+  });
+});
+
+describe("user_bash cues", () => {
+  it("queues matched cues for the next turn instead of interrupting", () => {
+    const skillPath = join(makeDir("pi-cues-it-skill-"), "SKILL.md");
+    writeFile(skillPath, "body");
+    const { fake, ctx } = setup(
+      `version = 1\n[[triggers]]\ntools = ["bash"]\nwhen.command = "jj"\naction = "skill"\ntarget = "jj-cli"\n`,
+      { "jj-cli": skillPath },
+    );
+
+    const handler = fake.handlers.get("user_bash");
+    const result = handler?.(
+      { type: "user_bash", command: "jj log", excludeFromContext: false, cwd: ctx.cwd },
+      ctx,
+    );
+    expect(result).toBeUndefined();
+    expect(fake.sent).toHaveLength(1);
+    expect(fake.sent[0]?.options).toEqual({ deliverAs: "nextTurn" });
+    expect(fake.sent[0]?.message.content).toContain('<skill name="jj-cli"');
+  });
+
+  it("ignores !! commands excluded from context", () => {
+    const skillPath = join(makeDir("pi-cues-it-skill-"), "SKILL.md");
+    writeFile(skillPath, "body");
+    const { fake, ctx } = setup(
+      `version = 1\n[[triggers]]\ntools = ["bash"]\nwhen.command = "jj"\naction = "skill"\ntarget = "jj-cli"\n`,
+      { "jj-cli": skillPath },
+    );
+    fake.handlers.get("user_bash")?.(
+      { type: "user_bash", command: "jj log", excludeFromContext: true, cwd: ctx.cwd },
+      ctx,
+    );
+    expect(fake.sent).toHaveLength(0);
+  });
+});
+
+describe("session lifecycle", () => {
+  it("re-fires cues after compaction", () => {
+    const skillPath = join(makeDir("pi-cues-it-skill-"), "SKILL.md");
+    writeFile(skillPath, "body");
+    const { fake, ctx } = setup(
+      `version = 1\n[[triggers]]\ntools = ["bash"]\nwhen.command = "jj"\naction = "skill"\ntarget = "jj-cli"\n`,
+      { "jj-cli": skillPath },
+    );
+
+    const handler = fake.handlers.get("tool_result");
+    handler?.(bashResult("jj log"), ctx);
+    expect(handler?.(bashResult("jj log"), ctx)).toBeUndefined();
+
+    fake.handlers.get("session_compact")?.({ type: "session_compact" }, ctx);
+    expect(injectedText(handler?.(bashResult("jj log"), ctx))).toContain('<skill name="jj-cli"');
+  });
+
+  it("notifies config diagnostics on session start", () => {
+    const { fake } = setup('version = 1\n[[triggers]]\ntools = ["bash"]\naction = "skill"\n');
+    expect(fake.notices.some((n) => n.includes("pi-cues:"))).toBe(true);
   });
 });
