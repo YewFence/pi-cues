@@ -1,0 +1,34 @@
+{
+  "name": "pi-cues",
+  "version": "0.1.0",
+  "description": "Deterministic context loading for the pi coding agent: a central trigger table maps bash commands and tool-operated file paths to skills and prompt files",
+  "bugs": {
+    "url": "https://github.com/YewFence/pi-cues/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/YewFence/pi-cues.git"
+  },
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "default": "./dist/index.mjs"
+    }
+  },
+  "scripts": {
+    "test": "vitest --run"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "oxfmt": "^0.72.0",
+    "oxlint": "^1.88.0",
+    "tsdown": "^0.23.1",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.4"
+  }
+}

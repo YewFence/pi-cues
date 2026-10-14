@@ -1,0 +1,16 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "ignorePatterns": [
+    ".github/",
+    "dist/",
+    "coverage/",
+    "docs/",
+    "node_modules/",
+    "aube-lock.yaml",
+    "mise*.toml",
+    "renovate.json",
+    "tsconfig*.json",
+    ".oxlintrc.json",
+    ".oxfmtrc.json"
+  ]
+}

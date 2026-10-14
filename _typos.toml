@@ -1,0 +1,6 @@
+[type.svg]
+check-file = false
+
+[files]
+# aube lockfiles are machine-generated; dependency names like `devlop` are not typos
+extend-exclude = ["aube-lock.yaml"]
