@@ -84,6 +84,8 @@ flowchart LR
 - **项目配置的 `file` target 禁止逃逸配置目录**：解析后路径不以配置目录为前缀（含绝对路径指外）的条目记 diagnostic 拒载；全局配置不受此限
 - **walkup 对 cwd 子树外的被操作文件完全不触发**（早期版本还会回退检查 cwd 本身，已移除——无关路径不该拉来无关上下文）
 
+**Schema 随包分发**：`config.schema.json` 由 `RawConfig` 类型经 ts-json-schema-generator 生成（`mise run schema:generate`；`tests/schema.test.ts` 做 freshness + ajv 正反例校验，漂移即红）。git 安装整仓 clone 天然带上；npm 发布时列入 `files`。`/cues status` 打印当前安装包内 schema 的绝对路径，供编辑器 `#:schema` 注释引用——schema 与所装版本严格一致，不靠 raw URL 猜远端状态。schema 只覆盖结构；跨字段语义（when 键与 tools 的匹配、项目 file 逃逸拒载）仍由 config.ts 校验。
+
 **内置默认（第零级）**：无配置也开箱即用——一条内网 walkup trigger（`tools = ["read","edit","write"]`、`target = ["AGENTS.md"]`），在全局和项目配置之前追加合并。任一配置文件写 `defaults = false` 即关闭。默认仅含 AGENTS.md：它是社区事实标准，也是 pi 原生 contextFiles 已覆盖项目根、本扩展补上子目录场景的那个文件。
 
 ### Schema

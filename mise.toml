@@ -38,6 +38,10 @@ run = "aube update"
 description = "Install Node dependencies from the lockfile"
 run = "aube install --frozen-lockfile"
 
+[tasks."schema:generate"]
+description = "Regenerate config.schema.json from the RawConfig types"
+run = "aube exec ts-json-schema-generator --path src/piCues/types.ts --type RawConfig --out config.schema.json"
+
 [tasks.test]
 description = "Run Node tests"
 run = "aube exec vitest --run"

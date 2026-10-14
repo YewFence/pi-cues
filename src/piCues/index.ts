@@ -2,8 +2,9 @@
  * Extension entry point: hooks `tool_result` / `user_bash`, loads config,
  * matches triggers, injects cue content, and registers `/cues`.
  */
-import { readFileSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
@@ -313,6 +314,16 @@ export default function piCues(pi: ExtensionAPI): void {
       `pi-cues: ${config.triggers.length} triggers from ${config.files.length} config file(s)`,
       ...config.files.map((file) => `  config: ${file}`),
     ];
+    // The schema ships inside the installed package: users can point their
+    // editor's `#:schema` comment at this exact-version local copy. The
+    // extension file lives at src/piCues/ in the repo and at dist/ in the
+    // published tarball, hence two candidate depths.
+    const schemaPath = ["../../config.schema.json", "../config.schema.json"]
+      .map((rel) => fileURLToPath(new URL(rel, import.meta.url)))
+      .find((path) => existsSync(path));
+    if (schemaPath !== undefined) {
+      lines.push(`schema: ${schemaPath}`);
+    }
     const diagnostics = [...config.diagnostics, ...session.diagnostics];
     if (diagnostics.length > 0) {
       lines.push(`diagnostics (${diagnostics.length}):`);

@@ -39,6 +39,16 @@ mise run build
 
 ### Configuration
 
+Editor validation and autocomplete for the config file (Taplo, Even Better TOML) via the shipped JSON Schema — `/cues status` prints the exact path of the copy inside your installed package:
+
+```toml
+#:schema /path/from/cues-status/config.schema.json
+
+version = 1
+```
+
+The schema is generated from the `RawConfig` types in `src/piCues/types.ts`; `tests/schema.test.ts` fails when the two drift apart.
+
 Create `.pi/pi-cues.toml` in your project (or `~/.pi/agent/pi-cues.toml` globally; the two are appended, global baseline first):
 
 ```toml
