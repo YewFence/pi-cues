@@ -28,6 +28,9 @@ describe("config.schema.json", () => {
 version = 1
 defaults = false
 
+[telemetry]
+enabled = true
+
 [[triggers]]
 tools = ["bash"]
 when.command = "jj"
@@ -62,6 +65,8 @@ target = "Commit messages in Chinese."
       `version = 1\n[[triggers]]\ntools = ["bash"]\naction = "skill"\ntarget = "x"\nwhen.unknown = "y"`,
       `version = 1\n[[triggers]]\ntools = ["bash", "deploy"]\naction = "skill"\ntarget = "x"`,
       `version = 1\ndefaults = "no"`,
+      `version = 1\ntelemetry = "off"`,
+      `version = 1\n[telemetry]\nenabled = "no"`,
     ];
     for (const toml of cases) {
       expect(validate(parseToml(toml)), toml).toBe(false);

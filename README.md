@@ -89,6 +89,17 @@ exclude = ["README.md"]
 
 Each target fires at most once per session (reset on compaction). `/cues status` shows the loaded config, diagnostics, and what has fired.
 
+Every fired cue is also appended to `~/.cache/pi-cues/events.jsonl` (one JSON line per event: timestamp, pi session id, action, target, source, and whether it loaded) so you can confirm pi-cues is working after the session is gone — `tail -f` it while you work. The file rotates to `events.jsonl.1` past 2 MiB. Local only, never sent anywhere; opt out in the global config:
+
+```toml
+version = 1
+
+[telemetry]
+enabled = false
+```
+
+Project-level `[telemetry]` entries are ignored: telemetry is the machine owner's knob, not a cloned repository's.
+
 Out of the box, pi-cues ships one builtin trigger: every read/edit/write walks up to the session cwd collecting `AGENTS.md` (deduplicated against pi's natively loaded context files). Add `defaults = false` to any config file to disable it.
 
 Walk-up collection — builtin and configured — only runs for projects with an explicit trusted decision in pi's `trust.json` (`/trust` records one). Undecided and declined projects collect nothing: pi's `isProjectTrusted()` reports true for projects without trust-requiring resources regardless of saved decisions (see [pi#10947](https://github.com/earendil-works/pi/issues/10947)), so the store file is the only reliable source. `/cues status` shows the current walk-up trust state.

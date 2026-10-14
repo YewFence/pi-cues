@@ -206,6 +206,11 @@ sessionWalkupCache: Map<targetDir, {
 - `session_start`、`session_compact`、`/reload` 时清空（compact 后旧上下文已压缩，重新触发是对的）
 - 若 pi 原生 skill 加载自带幂等（如已加载 skill 不重复进上下文），去重仍保留——避免依赖内部实现细节
 
+## 本地遥测
+
+- 每次触发追加一行 JSON 到 `~/.cache/pi-cues/events.jsonl`（尊重 `XDG_CACHE_HOME`）：`ts` / `sessionId`（取自 `ctx.sessionManager`）/ `action` / `target` / `source` / `loaded`，含加载失败（`loaded: false`）——回答“它到底有没有在干”这一个问题，不记匹配未触发、不记诊断
+- 默认开，仅全局配置可关（`[telemetry] enabled = false`）；写入失败静默；超 2 MiB 单代轮转
+
 ## 从 pi-rules cp 的文件
 
 新仓库（非 fork），按 MIT + NOTICE 条款 cp 以下文件并保留原 copyright，注明启发来源：

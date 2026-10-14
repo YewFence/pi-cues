@@ -14,6 +14,7 @@ import { extractCommands } from "./parse.js";
 import { extractToolPaths, pathBaseValues, toPathBases } from "./paths.js";
 import { loadSkillBlock, resolveSkill } from "./skills.js";
 import { effectiveTrustDecision, resolveAgentDir } from "./trust.js";
+import { recordTriggeredEvent, resolveCacheDir, telemetryEventFile } from "./telemetry.js";
 import { formatFileBlock, type FileContent } from "./truncate.js";
 import {
   claimOnce,
@@ -21,6 +22,7 @@ import {
   createSessionState,
   dedupKey,
   type SessionState,
+  type TriggeredRecord,
 } from "./triggers.js";
 import type { Trigger } from "./types.js";
 import {
@@ -31,9 +33,18 @@ import {
 } from "./walkup.js";
 
 export default function piCues(pi: ExtensionAPI): void {
-  let config: LoadedConfig = { triggers: [], diagnostics: [], files: [], projectUntrusted: false };
+  let config: LoadedConfig = {
+    triggers: [],
+    diagnostics: [],
+    files: [],
+    projectUntrusted: false,
+    telemetry: true,
+  };
   let walkupAllowed = false;
   let walkupTrustNote = "disabled (no trust decision)";
+  const telemetryCacheDir = resolveCacheDir();
+  let telemetryEnabled = true;
+  let sessionId = "";
   const session: SessionState = createSessionState();
   const walkupCache: WalkupCache = createWalkupCache();
   /** Paths (and realpaths) pi already injected into the system prompt; rebuilt per run. */
@@ -42,12 +53,14 @@ export default function piCues(pi: ExtensionAPI): void {
   pi.on("session_start", (_event, ctx) => {
     clearSession(session);
     walkupCache.entries.clear();
+    sessionId = ctx.sessionManager.getSessionId();
     const agentDir = resolveAgentDir();
     config = loadConfig({
       cwd: ctx.cwd,
       agentDir,
       projectTrusted: typeof ctx.isProjectTrusted === "function" ? ctx.isProjectTrusted() : true,
     });
+    telemetryEnabled = config.telemetry;
     const decision = effectiveTrustDecision(ctx.cwd, agentDir);
     walkupAllowed = decision === true;
     walkupTrustNote =
@@ -249,6 +262,7 @@ export default function piCues(pi: ExtensionAPI): void {
       if (record === undefined) {
         return null;
       }
+      logTelemetry(record);
       return `pi-cues: trigger: ${cue} source: ${trigger.source} (inline)\n\n${target}`;
     }
 
@@ -266,9 +280,11 @@ export default function piCues(pi: ExtensionAPI): void {
       const block = skill === null ? null : loadSkillBlock(skill);
       if (block === null) {
         diagnose(`Skill not found or unreadable: ${target}`, trigger.source);
+        logTelemetry(record);
         return null;
       }
       record.loaded = true;
+      logTelemetry(record);
       return `pi-cues: trigger: ${cue} source: ${skill?.path}\n\n${block}`;
     }
 
@@ -288,9 +304,11 @@ export default function piCues(pi: ExtensionAPI): void {
         body = readFileSync(path, "utf8");
       } catch {
         diagnose(`Prompt file not found or unreadable: ${path}`, trigger.source);
+        logTelemetry(record);
         return null;
       }
       record.loaded = true;
+      logTelemetry(record);
       return formatFileBlock([{ path, body }], `pi-cues: trigger: ${cue} source: ${path}`);
     }
 
@@ -327,9 +345,11 @@ export default function piCues(pi: ExtensionAPI): void {
         body = readFileSync(file.path, "utf8");
       } catch {
         diagnose(`Context file unreadable: ${file.path}`, source);
+        logTelemetry(record);
         continue;
       }
       record.loaded = true;
+      logTelemetry(record);
       contents.push({ path: file.path, body });
     }
 
@@ -344,6 +364,13 @@ export default function piCues(pi: ExtensionAPI): void {
     session.diagnostics.push({ severity: "warning", source, message });
   }
 
+  /** Local cache sink for "did pi-cues actually fire?"; failures are swallowed inside. */
+  function logTelemetry(record: TriggeredRecord): void {
+    if (telemetryEnabled) {
+      recordTriggeredEvent(telemetryCacheDir, sessionId, record);
+    }
+  }
+
   function isExcluded(patterns: readonly string[], cwd: string, filePath: string): boolean {
     if (patterns.length === 0) {
       return false;
@@ -356,6 +383,9 @@ export default function piCues(pi: ExtensionAPI): void {
       `pi-cues: ${config.triggers.length} triggers from ${config.files.length} config file(s)`,
       ...config.files.map((file) => `  config: ${file}`),
       `  walk-up: ${walkupTrustNote}`,
+      `  telemetry: ${
+        telemetryEnabled ? `enabled (${telemetryEventFile(telemetryCacheDir)})` : "disabled"
+      }`,
     ];
     // The schema ships inside the installed package: users can point their
     // editor's `#:schema` comment at this exact-version local copy. The

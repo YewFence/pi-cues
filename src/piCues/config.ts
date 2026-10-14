@@ -28,6 +28,8 @@ export interface LoadedConfig {
   files: string[];
   /** True when the project config was skipped because the directory is untrusted. */
   projectUntrusted: boolean;
+  /** False only when the global config sets `[telemetry] enabled = false`. Default true. */
+  telemetry: boolean;
 }
 
 /**
@@ -68,6 +70,7 @@ export function loadConfig(options: LoadConfigOptions): LoadedConfig {
     diagnostics: [],
     files: [],
     projectUntrusted: false,
+    telemetry: true,
   };
   const globalLevel = loadLevel(options.agentDir, "global", true, config);
   const projectLevel = loadLevel(
@@ -77,6 +80,7 @@ export function loadConfig(options: LoadConfigOptions): LoadedConfig {
     config,
   );
   config.projectUntrusted = !projectLevel.trusted && projectLevel.file !== undefined;
+  config.telemetry = globalLevel.telemetry !== false;
   if (globalLevel.defaults && projectLevel.defaults) {
     config.triggers.push(...defaultTriggers(options.cwd));
   }
@@ -89,6 +93,8 @@ interface LevelResult {
   defaults: boolean;
   trusted: boolean;
   file: string | undefined;
+  /** Explicit `[telemetry] enabled` from this level; undefined when absent or invalid. */
+  telemetry: boolean | undefined;
 }
 
 function loadLevel(
@@ -97,7 +103,13 @@ function loadLevel(
   trusted: boolean,
   config: LoadedConfig,
 ): LevelResult {
-  const empty: LevelResult = { triggers: [], defaults: true, trusted, file: undefined };
+  const empty: LevelResult = {
+    triggers: [],
+    defaults: true,
+    trusted,
+    file: undefined,
+    telemetry: undefined,
+  };
   const file =
     scope === "project"
       ? join(baseDir, "extensions", "pi-cues", "config.toml")
@@ -129,13 +141,14 @@ function loadLevel(
       source: file,
       message: "Project is not trusted; config ignored",
     });
-    return { triggers: [], defaults: true, trusted, file };
+    return { triggers: [], defaults: true, trusted, file, telemetry: undefined };
   }
   const defaults = defaultsValue !== false;
+  const telemetry = parseTelemetry(parsed["telemetry"], file, scope, config);
 
   const rawTriggers = parsed["triggers"];
   if (rawTriggers === undefined) {
-    return { triggers: [], defaults, trusted, file };
+    return { triggers: [], defaults, trusted, file, telemetry };
   }
   if (!Array.isArray(rawTriggers)) {
     config.diagnostics.push({
@@ -143,7 +156,7 @@ function loadLevel(
       source: file,
       message: "`triggers` must be an array",
     });
-    return { triggers: [], defaults, trusted, file };
+    return { triggers: [], defaults, trusted, file, telemetry };
   }
 
   const triggers: Trigger[] = [];
@@ -165,7 +178,57 @@ function loadLevel(
     }
     config.diagnostics.push(...result.diagnostics);
   }
-  return { triggers, defaults, trusted, file };
+  return { triggers, defaults, trusted, file, telemetry };
+}
+
+/**
+ * Telemetry is a machine-level knob for the user running the agent, so only
+ * the global config may toggle it. A project entry (a cloned repository's)
+ * is ignored with a warning; its parsed value never leaks into the result.
+ */
+function parseTelemetry(
+  value: unknown,
+  file: string,
+  scope: "global" | "project",
+  config: LoadedConfig,
+): boolean | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!isRecord(value)) {
+    config.diagnostics.push({
+      severity: "warning",
+      source: file,
+      message: "`telemetry` must be a table",
+    });
+    return undefined;
+  }
+  const unknownKeys = Object.keys(value).filter((key) => key !== "enabled");
+  if (unknownKeys.length > 0) {
+    config.diagnostics.push({
+      severity: "warning",
+      source: file,
+      message: "`telemetry` has unknown keys: " + unknownKeys.join(", "),
+    });
+  }
+  if (scope === "project") {
+    config.diagnostics.push({
+      severity: "warning",
+      source: file,
+      message: "`telemetry` is only valid in the global config; ignored",
+    });
+    return undefined;
+  }
+  const enabled = value["enabled"];
+  if (enabled !== undefined && typeof enabled !== "boolean") {
+    config.diagnostics.push({
+      severity: "warning",
+      source: file,
+      message: "`telemetry.enabled` must be a boolean",
+    });
+    return undefined;
+  }
+  return enabled;
 }
 
 function parseConfigFile(file: string, config: LoadedConfig): Record<string, unknown> | undefined {

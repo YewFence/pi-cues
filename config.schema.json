@@ -14,6 +14,10 @@
           "description": "Set to false to disable the builtin walkup trigger (AGENTS.md up to the session cwd).",
           "type": "boolean"
         },
+        "telemetry": {
+          "$ref": "#/definitions/RawTelemetry",
+          "description": "Local telemetry settings. Only the global config's entry takes effect; project entries are ignored."
+        },
         "triggers": {
           "description": "Trigger entries. Global config provides the baseline; project config entries are appended.",
           "items": {
@@ -28,6 +32,16 @@
         }
       },
       "required": ["version"],
+      "type": "object"
+    },
+    "RawTelemetry": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Set to false to stop recording fired cues to ~/.cache/pi-cues/events.jsonl. Default true.",
+          "type": "boolean"
+        }
+      },
       "type": "object"
     },
     "RawTrigger": {

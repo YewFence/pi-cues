@@ -223,3 +223,47 @@ exclude = "x.md"
     expect(config.triggers[1]?.configDir).toBe(join(project, ".pi", "extensions", "pi-cues"));
   });
 });
+
+describe("telemetry setting", () => {
+  it("defaults to enabled", () => {
+    const home = makeTree({ ".pi/agent/pi-cues.toml": VALID });
+    const config = loadConfig({ cwd: makeTree({}), agentDir: join(home, ".pi", "agent") });
+    expect(config.telemetry).toBe(true);
+    expect(config.diagnostics).toEqual([]);
+  });
+
+  it("turns off via [telemetry] enabled = false in the global config", () => {
+    const home = makeTree({
+      ".pi/agent/pi-cues.toml": "version = 1\n[telemetry]\nenabled = false\n",
+    });
+    const config = loadConfig({ cwd: makeTree({}), agentDir: join(home, ".pi", "agent") });
+    expect(config.telemetry).toBe(false);
+    expect(config.diagnostics).toEqual([]);
+  });
+
+  it("ignores project-level telemetry with a warning", () => {
+    const project = makeTree({
+      ".pi/extensions/pi-cues/config.toml": "version = 1\n[telemetry]\nenabled = false\n",
+    });
+    const config = loadConfig({ cwd: project, agentDir: makeAgent() });
+    expect(config.telemetry).toBe(true);
+    expect(
+      config.diagnostics.some((d) => d.message.includes("only valid in the global config")),
+    ).toBe(true);
+  });
+
+  it("diagnoses malformed telemetry entries and stays enabled", () => {
+    const home = makeTree({ ".pi/agent/pi-cues.toml": 'version = 1\ntelemetry = "off"\n' });
+    const enabledString = makeTree({
+      ".pi/agent/pi-cues.toml": 'version = 1\n[telemetry]\nenabled = "no"\n',
+    });
+    const unknownKey = makeTree({
+      ".pi/agent/pi-cues.toml": "version = 1\n[telemetry]\nremote = true\n",
+    });
+    for (const tree of [home, enabledString, unknownKey]) {
+      const config = loadConfig({ cwd: makeTree({}), agentDir: join(tree, ".pi", "agent") });
+      expect(config.telemetry).toBe(true);
+      expect(config.diagnostics.some((d) => d.message.includes("telemetry"))).toBe(true);
+    }
+  });
+});

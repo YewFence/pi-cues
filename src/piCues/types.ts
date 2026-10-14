@@ -16,8 +16,15 @@ export interface RawConfig {
   version: 1;
   /** Set to false to disable the builtin walkup trigger (AGENTS.md up to the session cwd). */
   defaults?: boolean;
+  /** Local telemetry settings. Only the global config's entry takes effect; project entries are ignored. */
+  telemetry?: RawTelemetry;
   /** Trigger entries. Global config provides the baseline; project config entries are appended. */
   triggers?: RawTrigger[];
+}
+
+export interface RawTelemetry {
+  /** Set to false to stop recording fired cues to ~/.cache/pi-cues/events.jsonl. Default true. */
+  enabled?: boolean;
 }
 
 export interface RawTrigger {

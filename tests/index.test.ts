@@ -1,4 +1,12 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, realpathSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+  realpathSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -85,6 +93,7 @@ function setup(configToml: string | null, skillPaths: Record<string, string> = {
   const ctx = {
     cwd: project,
     hasUI: true,
+    sessionManager: { getSessionId: () => "session-test-id" },
     ui: { notify: (message: string) => fake.notices.push(message) },
   };
   fake.handlers.get("session_start")?.({ type: "session_start" }, ctx);
@@ -214,7 +223,12 @@ describe("walkup cue", () => {
     process.env["PI_CODING_AGENT_DIR"] = join(home, ".pi", "agent");
     const fake = createFakePi();
     piCues(fake.pi);
-    const ctx = { cwd: project, hasUI: true, ui: { notify: (m: string) => fake.notices.push(m) } };
+    const ctx = {
+      cwd: project,
+      hasUI: true,
+      sessionManager: { getSessionId: () => "session-test-id" },
+      ui: { notify: (m: string) => fake.notices.push(m) },
+    };
     fake.handlers.get("session_start")?.({ type: "session_start" }, ctx);
     writeFile(join(project, "AGENTS.md"), "root agents");
     writeFile(join(project, "a.ts"), "code");
@@ -234,7 +248,12 @@ describe("walkup cue", () => {
     process.env["PI_CODING_AGENT_DIR"] = join(home, ".pi", "agent");
     const fake = createFakePi();
     piCues(fake.pi);
-    const ctx = { cwd: project, hasUI: true, ui: { notify: (m: string) => fake.notices.push(m) } };
+    const ctx = {
+      cwd: project,
+      hasUI: true,
+      sessionManager: { getSessionId: () => "session-test-id" },
+      ui: { notify: (m: string) => fake.notices.push(m) },
+    };
     fake.handlers.get("session_start")?.({ type: "session_start" }, ctx);
     writeFile(join(project, "AGENTS.md"), "root agents");
     writeFile(join(project, "a.ts"), "code");
@@ -410,6 +429,7 @@ describe("trust and attribution", () => {
       cwd: project,
       hasUI: true,
       isProjectTrusted: () => false,
+      sessionManager: { getSessionId: () => "session-test-id" },
       ui: { notify: (message: string) => fake.notices.push(message) },
     };
     fake.handlers.get("session_start")?.({ type: "session_start" }, ctx);
@@ -469,5 +489,73 @@ describe("session lifecycle", () => {
   it("notifies config diagnostics on session start", () => {
     const { fake } = setup('version = 1\n[[triggers]]\ntools = ["bash"]\naction = "skill"\n');
     expect(fake.notices.some((n) => n.includes("pi-cues:"))).toBe(true);
+  });
+});
+
+describe("telemetry", () => {
+  afterEach(() => {
+    delete process.env["XDG_CACHE_HOME"];
+  });
+
+  function readEvents(cache: string): Array<Record<string, unknown>> {
+    return readFileSync(join(cache, "pi-cues", "events.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+  }
+
+  it("appends one event per fired cue, tagged with the pi session id", () => {
+    // #given a jj → jj-cli trigger #when `jj log` runs twice #then one event, deduped like the injection
+    const cache = makeDir("pi-cues-it-cache-");
+    process.env["XDG_CACHE_HOME"] = cache;
+    const skillPath = join(makeDir("pi-cues-it-skill-"), "SKILL.md");
+    writeFile(skillPath, "body");
+    const { fake, ctx } = setup(
+      `version = 1\n[[triggers]]\ntools = ["bash"]\nwhen.command = "jj"\naction = "skill"\ntarget = "jj-cli"\n`,
+      { "jj-cli": skillPath },
+    );
+
+    const handler = fake.handlers.get("tool_result");
+    handler?.(bashResult("jj log"), ctx);
+    handler?.(bashResult("jj log"), ctx);
+
+    const events = readEvents(cache);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      sessionId: "session-test-id",
+      action: "skill",
+      target: "jj-cli",
+      loaded: true,
+    });
+    expect(typeof events[0]?.["ts"]).toBe("string");
+  });
+
+  it("records failed loads as loaded: false", () => {
+    const cache = makeDir("pi-cues-it-cache-");
+    process.env["XDG_CACHE_HOME"] = cache;
+    const { fake, ctx } = setup(
+      `version = 1\n[[triggers]]\ntools = ["bash"]\nwhen.command = "jj"\naction = "skill"\ntarget = "ghost"\n`,
+    );
+
+    fake.handlers.get("tool_result")?.(bashResult("jj st"), ctx);
+
+    expect(readEvents(cache)[0]).toMatchObject({ action: "skill", target: "ghost", loaded: false });
+  });
+
+  it("writes nothing when the global config disables telemetry", () => {
+    const cache = makeDir("pi-cues-it-cache-");
+    process.env["XDG_CACHE_HOME"] = cache;
+    const { fake, home, ctx } = setup(
+      `version = 1\n[[triggers]]\ntools = ["bash"]\nwhen.command = "jj"\naction = "inline"\ntarget = "note"\n`,
+    );
+    writeFile(
+      join(home, ".pi", "agent", "pi-cues.toml"),
+      "version = 1\n[telemetry]\nenabled = false\n",
+    );
+    fake.handlers.get("session_start")?.({ type: "session_start" }, ctx);
+
+    fake.handlers.get("tool_result")?.(bashResult("jj st"), ctx);
+
+    expect(existsSync(join(cache, "pi-cues"))).toBe(false);
   });
 });
