@@ -639,6 +639,54 @@ describe("telemetry", () => {
   });
 });
 
+describe("when.command subcommand matching", () => {
+  it("matches subcommand patterns like jj edit while bare jj still matches every call", async () => {
+    // #given a subcommand-addressed trigger #when `jj edit` runs #then it fires
+    const skillPath = join(makeDir("pi-cues-it-skill-"), "SKILL.md");
+    writeFile(skillPath, "---\nname: jj-edit\n---\n\nJJ edit body.");
+    const { fake, ctx } = setup(
+      `version = 1\n[[triggers]]\ntools = ["bash"]\nwhen.command = "jj edit"\naction = "skill"\ntarget = "jj-edit"\n`,
+      { "jj-edit": skillPath },
+    );
+
+    const handler = fake.handlers.get("tool_result");
+    // #then jj edit fires
+    expect(injectedText(await handler?.(bashResult("jj edit"), ctx))).toContain("JJ edit body.");
+    expect(injectedText(await handler?.(bashResult("jj edit abc123"), ctx))).toBeUndefined();
+    // #then jj log does not fire
+    expect(await handler?.(bashResult("jj log"), ctx)).toBeUndefined();
+  });
+
+  it("bare jj matches every subcommand via prefix candidates", async () => {
+    // #given jj → jj-cli trigger #when `jj edit` runs #then the bare command still fires
+    const skillPath = join(makeDir("pi-cues-it-skill-"), "SKILL.md");
+    writeFile(skillPath, "---\nname: jj-cli\n---\n\nJJ body.");
+    const { fake, ctx } = setup(
+      `version = 1\n[[triggers]]\ntools = ["bash"]\nwhen.command = "jj"\naction = "skill"\ntarget = "jj-cli"\n`,
+      { "jj-cli": skillPath },
+    );
+
+    const handler = fake.handlers.get("tool_result");
+    expect(injectedText(await handler?.(bashResult("jj edit"), ctx))).toContain("JJ body.");
+    expect(injectedText(await handler?.(bashResult("jj log"), ctx))).toBeUndefined();
+    expect(injectedText(await handler?.(bashResult("jj st"), ctx))).toBeUndefined();
+  });
+
+  it("does not treat flag values as subcommands", async () => {
+    // #given jj edit → jj-cli trigger #when `jj log -r abc` runs #then only jj matches
+    const skillPath = join(makeDir("pi-cues-it-skill-"), "SKILL.md");
+    writeFile(skillPath, "---\nname: jj-cli\n---\n\nJJ body.");
+    const { fake, ctx } = setup(
+      `version = 1\n[[triggers]]\ntools = ["bash"]\nwhen.command = "jj log abc"\naction = "skill"\ntarget = "jj-cli"\n`,
+      { "jj-cli": skillPath },
+    );
+
+    const handler = fake.handlers.get("tool_result");
+    // -r is a flag so abc is its value, not a positional — no match
+    expect(await handler?.(bashResult("jj log -r abc"), ctx)).toBeUndefined();
+  });
+});
+
 describe("exec cue", () => {
   let savedOperations: typeof execOperations;
 

@@ -64,7 +64,7 @@ flowchart LR
 
 `user_bash` 的注入出口与 `tool_result` 不同：`UserBashEventResult` 只有 `{operations}` / `{result}` 两个接管执行的分支，没有附加内容的通道，返回 `undefined` 就是纯观察。且事件在命令**执行前**触发，立即 `sendMessage` 会打断进行中的 agent turn。因此 user_bash 命中的 cue **记为 pending，在下一次模型请求前用 `pi.sendMessage()` 发出**（去重 Set 在命中时即记，语义与 tool_result 管道一致）。`excludeFromContext` 为 true（`!!` 前缀）的命令**不触发**——命令本身不进上下文，注入的 cue 会成为无源之水。
 
-两条管道只负责产出「待匹配字符串」——命令管道出 basename 列表，路径管道出多 base（projectRelative / scopeRelative / basename）——之后汇入同一套 `tools` + `when` 匹配与去重状态机。失败的 bash 调用（`isError: true`）也触发：失败的 `jj` 调用恰恰说明模型需要 SKILL。
+两条管道只负责产出「待匹配字符串」——命令管道出**词级前缀候选**（见下文提取算法），路径管道出多 base（projectRelative / scopeRelative / basename）——之后汇入同一套 `tools` + `when` 匹配与去重状态机。失败的 bash 调用（`isError: true`）也触发：失败的 `jj` 调用恰恰说明模型需要 SKILL。
 
 ### 注入信封（envelope）
 
@@ -209,7 +209,7 @@ target = ["AGENTS.md", "CLAUDE.md", "CONTEXT.md"]
 字段语义：
 
 - `tools`：本条 trigger 监听哪些工具事件。决定 `when` 里能出现哪些键（`bash` → `command`；`read`/`edit`/`write` → `path`）
-- `when`：谓词子表，键名自带语义判别。首版两个键：`command`（匹配提取出的命令 basename，无通配符时为精确匹配）、`path`（匹配操作路径，走 picomatch glob）。未来可扩多键 AND 复合条件（如 `when.args`），不用改 schema
+- `when`：谓词子表，键名自带语义判别。首版两个键：`command`（匹配提取出的命令候选——basename 及子命令前缀，无通配符时为精确匹配）、`path`（匹配操作路径，走 picomatch glob）。未来可扩多键 AND 复合条件（如 `when.args`），不用改 schema
 - `action`：`skill`、`file`、`walkup`、`inline` 或 `exec`
 - `target`：`skill` 动作时是 skill 名（不带 `skill:` 前缀），经 `pi.getCommands()` 解析为 SKILL.md 路径（目录查找与冲突消歧全是 pi 原生行为）；`file` 动作时是提示词文件路径；`walkup` 动作时是上下文文件名列表（string 或 string[]）；`inline` 动作时是待注入的文本本身（去重键即内容，无需读文件）；`exec` 动作时是字面命令行（无占位符插值），经 pi 的 bash shell 在会话 cwd 运行，输出截断后注入（去重键即命令文本）；它在 `tool_result` handler 内等待命令跑完，因此会给当次工具调用加上这段耗时，target 应该是 `--help` 这类快命令。`target` 允许 string | array 不是 walkup 特例——`skill` 动作一条触发加载多个 SKILL 本来就是自然泛化
 
@@ -234,7 +234,7 @@ target = ["AGENTS.md", "CLAUDE.md", "CONTEXT.md"]
 1. 用 `shell-quote` 的 `parse()` 拆词，按操作符 token 切出简单命令序列；heredoc、`$()`、反引号内容整体跳过（解析失败时静默放弃整条命令，不触发不报错）
 2. 剥前缀形如 `NAME=value` 的环境赋值 token——spike 已验证 `parse()` 输出中赋值是纯字符串 token（如 `"FOO=1"`），用 `/^[A-Za-z_]\w*=/` 判别即可
 3. 剥一层已知包装器（小集合**硬编码**，首版不可配置；真有需求再加，默认即此集合向后兼容容易）：`sudo`、`env`、`npx`、`bunx`、`uv run`、`mise x`、`mise run`
-4. 取剩余首 token 的 `basename()`，与命中 `bash` 的 trigger 的 `when.command` 比对（大小写敏感，无通配符即精确匹配）
+4. 取剩余首 token 的 `basename()` 作为命令名；再收集其后的**位置参数词**（遇到 flag 即停），把 `[命令名, ...位置参数]` 的**每个词级前缀**都作为一个候选：`jj edit abc123` 产出 `["jj", "jj edit", "jj edit abc123"]`，裸 `jj` 产出 `["jj"]`。这样 `when.command = "jj"` 仍匹配所有 jj 调用（前缀语义），而 `when.command = "jj edit"` 可以精确指向子命令；picomatch glob（如 `"jj edit *"`）覆盖参数级表达
 
 管道两侧（`jj log | rg foo`）都会提取，因此 `jj` 和 `rg` 各自可触发；同一条命令多次出现同一命令只记一次。
 

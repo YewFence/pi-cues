@@ -76,14 +76,13 @@ action = "inline"
 target = "Write commit messages in Chinese."
 
 # Running `jj ...` runs a command and injects its output — the classic case
-# is pulling the exact help text of the subcommand in play. exec targets are
-# literal command lines (no placeholder interpolation), run through pi's own
-# bash shell in the session cwd, truncated to the usual budget, and appended
-# to that tool result once the command settles. Keep them fast: the command
-# adds its own runtime to the bash call.
+# is pulling the exact help text of the subcommand in play. when.command
+# matches subcommands too: "jj edit" only fires for `jj edit …`, while bare
+# "jj" still matches every jj invocation. The command runs inside the tool
+# result, so keep it fast: it adds its own runtime to the bash call.
 [[triggers]]
 tools = ["bash"]
-when.command = "jj"
+when.command = "jj edit"
 action = "exec"
 target = "jj edit --help"
 
