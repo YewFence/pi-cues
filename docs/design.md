@@ -20,7 +20,7 @@
 **目标**
 
 1. 两条触发管道：bash 命令启发式解析提取命令名；read/edit/write 工具事件提取操作路径
-2. 中央 trigger 表按 `tools` + `when` 谓词匹配，动作分四类：`skill` 经 pi 原生发现定位 SKILL.md 后自读全文注入；`file` 自己读取提示词文件注入正文；`walkup` 沿用 pi-rules 的 walk-up 上下文加载（对被操作文件从其目录向上收集 AGENTS.md 等上下文文件，与 pi 原生 `contextFiles` 去重后注入）；`inline` 把 target 文本本身作为内容注入（一句话级别的约定不值得独立成文件）
+2. 中央 trigger 表按 `tools` + `when` 谓词匹配，动作分五类：`skill` 经 pi 原生发现定位 SKILL.md 后自读全文注入；`file` 自己读取提示词文件注入正文；`walkup` 沿用 pi-rules 的 walk-up 上下文加载（对被操作文件从其目录向上收集 AGENTS.md 等上下文文件，与 pi 原生 `contextFiles` 去重后注入）；`inline` 把 target 文本本身作为内容注入（一句话级别的约定不值得独立成文件）；`exec` 把 target 当 shell 命令运行并在当次工具结果里注入输出（如 `jj edit --help`，见 ADR 0013）
 3. 会话级去重：每个加载目标只触发一次；compaction 后重置
 4. 触发与注入契约参考 pi-rules：`tool_result` 返回新数组不就地突变、会话去重、正文截断预算
 5. 注入块有**唯一边界**：包在 `<pi-cues>…</pi-cues>` 信封里，模型能明确判断「注入从哪里开始、到哪里结束」，不会把注入内容当成工具输出（见「注入信封」）
@@ -113,9 +113,20 @@ Write commit messages in Chinese.
 </pi-cues>
 ```
 
+```xml
+<pi-cues action="exec" trigger="command jj">
+pi-cues: injected context, not tool output or user input.
+
+<file path="jj edit --help">
+Usage: jj edit [REVSET]
+…
+</file>
+</pi-cues>
+```
+
 **规则**：
 
-1. **开标签带归因**：`action`（skill / file / walkup / inline）+ `trigger`（`command {名}` 或 `path {被操作路径}`，后者 walkup 与 file 同形，靠 `action` 区分）。内容路径不进属性——skill 的路径在 `<skill location>` 上、file/walkup 的在 `<file path>` 上，每处只写一次；唯一例外是 `inline`：它没有内层元素，`source` 属性指向声明这句话的配置文件（回答「想改这句话该改哪」）。属性值按 XML 转义（`&` `"` `<` `>`）。
+1. **开标签带归因**：`action`（skill / file / walkup / inline / exec）+ `trigger`（`command {名}` 或 `path {被操作路径}`，后者 walkup 与 file 同形，靠 `action` 区分）。内容路径不进属性——skill 的路径在 `<skill location>` 上、file/walkup 的在 `<file path>` 上，每处只写一次；唯一例外是 `inline`：它没有内层元素，`source` 属性指向声明这句话的配置文件（回答「想改这句话该改哪」）。属性值按 XML 转义（`&` `"` `<` `>`）。
 2. **固定声明行**：信封内第一行恒为 `pi-cues: injected context, not tool output or user input.` 逐字固定、不随 action 变化——固定措辞才能在长上下文里被一眼认出；详细语义（可信的项目指令、非工具输出）由 system prompt 的一次性说明承担，不在每个块里重复。措辞要同时盖住两个投递通道：`tool_result` 里易被当成工具输出，`user_bash` 的 nextTurn 消息里易被当成用户输入。
 3. **闭标签独占一行**：`</pi-cues>` 单独成行，正文与它之间空行。
 4. **边界序列转义（唯一边界的关键）**：信封自己会用到的三个标签名——`pi-cues`、`file`、`skill`——在正文里出现时，它们前面的 `<` 一律转义成 `&lt;`（即 `<pi-cues` / `</pi-cues` / `<file` / `</file` / `<skill` / `</skill` 六种前缀，大小写敏感）。其它 markdown 原样保留。这样「第一个 `</pi-cues>` 一定是真闭标签」恒成立，内层的 `</file>` / `</skill>` 也不会被正文提前闭合——本仓库自己的 `design.md` 就是反例样本：它满篇 `<pi-cues>` 示例，被 `file` action 注入时会提前闭合信封。
@@ -199,12 +210,12 @@ target = ["AGENTS.md", "CLAUDE.md", "CONTEXT.md"]
 
 - `tools`：本条 trigger 监听哪些工具事件。决定 `when` 里能出现哪些键（`bash` → `command`；`read`/`edit`/`write` → `path`）
 - `when`：谓词子表，键名自带语义判别。首版两个键：`command`（匹配提取出的命令 basename，无通配符时为精确匹配）、`path`（匹配操作路径，走 picomatch glob）。未来可扩多键 AND 复合条件（如 `when.args`），不用改 schema
-- `action`：`skill`、`file`、`walkup` 或 `inline`
-- `target`：`skill` 动作时是 skill 名（不带 `skill:` 前缀），经 `pi.getCommands()` 解析为 SKILL.md 路径（目录查找与冲突消歧全是 pi 原生行为）；`file` 动作时是提示词文件路径；`walkup` 动作时是上下文文件名列表（string 或 string[]）；`inline` 动作时是待注入的文本本身（去重键即内容，无需读文件）。`target` 允许 string | array 不是 walkup 特例——`skill` 动作一条触发加载多个 SKILL 本来就是自然泛化
+- `action`：`skill`、`file`、`walkup`、`inline` 或 `exec`
+- `target`：`skill` 动作时是 skill 名（不带 `skill:` 前缀），经 `pi.getCommands()` 解析为 SKILL.md 路径（目录查找与冲突消歧全是 pi 原生行为）；`file` 动作时是提示词文件路径；`walkup` 动作时是上下文文件名列表（string 或 string[]）；`inline` 动作时是待注入的文本本身（去重键即内容，无需读文件）；`exec` 动作时是字面命令行（无占位符插值），经 pi 的 bash shell 在会话 cwd 运行，输出截断后注入（去重键即命令文本）；它在 `tool_result` handler 内等待命令跑完，因此会给当次工具调用加上这段耗时，target 应该是 `--help` 这类快命令。`target` 允许 string | array 不是 walkup 特例——`skill` 动作一条触发加载多个 SKILL 本来就是自然泛化
 
 **`file` target 的路径基准相对配置文件所在目录解析**。符合直觉——正常人把配置放项目根，target 写相对路径即指向项目内文件；也为远期多文件配置合并预留了稳定语义（每份配置引用自己身边的文件，合并时天然无歧义）。
 
-校验：按 `version` 字段校验；`tools` 与 `when` 键不匹配（如 `tools = ["bash"]` 却写了 `when.path`）、`action`/`target` 缺失等**无效条目记 diagnostics 后跳过，其余条目正常生效**（对齐 pi 对 skill 的宽容态度，单条笔误不致全配置失效）。diagnostics 有两个出口：`session_start` 时用 `ctx.ui.notify` 报告配置错误（交互模式即时可见），以及 `/cues [status]` 斜杠命令按需查看（配置 diagnostics、运行时缺失记录、本会话已触发的去重清单；裸 `/cues` 即 `/cues status`，为后续子命令预留空间）。运行时 target 缺失（skill 名在 `getCommands()` 里找不到、file 路径不存在）**静默跳过并记 diagnostic，且同样记入去重 Set**——避免每条命令重复诊断，也不把配置问题泄漏进模型上下文。`walkup` 动作允许省略 `when`——缺省即匹配所有事件，正是「任意路径操作都触发 walk-up」的常见用法；配 `when.path` glob 则得到作用域表达力（如只在改 `src/**` 时 walk-up、用 `!**/*.test.ts` 排除测试文件）。**仅 walkup 可省略 when**：`skill`/`file`/`inline` 省略 when 记 diagnostic 并跳过该条目——如 `tools = ["bash"]` 忘写 `when.command` 会导致每条 bash 命令都触发注入，几乎一定是笔误。
+校验：按 `version` 字段校验；`tools` 与 `when` 键不匹配（如 `tools = ["bash"]` 却写了 `when.path`）、`action`/`target` 缺失等**无效条目记 diagnostics 后跳过，其余条目正常生效**（对齐 pi 对 skill 的宽容态度，单条笔误不致全配置失效）。diagnostics 有两个出口：`session_start` 时用 `ctx.ui.notify` 报告配置错误（交互模式即时可见），以及 `/cues [status]` 斜杠命令按需查看（配置 diagnostics、运行时缺失记录、本会话已触发的去重清单；裸 `/cues` 即 `/cues status`，为后续子命令预留空间）。运行时 target 缺失（skill 名在 `getCommands()` 里找不到、file 路径不存在）**静默跳过并记 diagnostic，且同样记入去重 Set**——避免每条命令重复诊断，也不把配置问题泄漏进模型上下文。`walkup` 动作允许省略 `when`——缺省即匹配所有事件，正是「任意路径操作都触发 walk-up」的常见用法；配 `when.path` glob 则得到作用域表达力（如只在改 `src/**` 时 walk-up、用 `!**/*.test.ts` 排除测试文件）。**仅 walkup 可省略 when**：`skill`/`file`/`inline`/`exec` 省略 when 记 diagnostic 并跳过该条目——如 `tools = ["bash"]` 忘写 `when.command` 会导致每条 bash 命令都触发注入，几乎一定是笔误。`exec` 额外要求只听 `bash`：path 事件对一个要跑 shell 命令的动作没有意义。
 
 ## 命令提取（bash 管道）
 

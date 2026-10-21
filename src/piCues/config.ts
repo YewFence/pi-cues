@@ -17,7 +17,7 @@ import type { ActionKind, CueDiagnostic, ToolName, Trigger, TriggerWhen } from "
 
 const TOOL_NAMES: ReadonlySet<string> = new Set(["bash", "read", "edit", "write"]);
 const PATH_TOOL_NAMES: ReadonlySet<string> = new Set(["read", "edit", "write"]);
-const ACTION_NAMES: ReadonlySet<string> = new Set(["skill", "file", "walkup", "inline"]);
+const ACTION_NAMES: ReadonlySet<string> = new Set(["skill", "file", "walkup", "inline", "exec"]);
 const WHEN_KEYS: ReadonlySet<string> = new Set(["command", "path"]);
 const CONFIG_VERSION = 1;
 
@@ -307,6 +307,14 @@ function validateTrigger(
   if (actionKind === "walkup" && tools.some((tool) => !PATH_TOOL_NAMES.has(tool))) {
     // Walk-up collects context files for path operations only.
     return reject("walkup triggers must not listen to bash");
+  }
+
+  if (actionKind === "exec" && tools.some((tool) => tool !== "bash")) {
+    // exec runs a shell command; path events give it nothing to react to.
+    return reject("exec triggers must listen to bash only");
+  }
+  if (actionKind === "exec" && !isRecord(raw["when"])) {
+    return reject("exec triggers require when.command");
   }
 
   const excludes = parseExcludes(raw["exclude"], actionKind);

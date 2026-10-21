@@ -4,7 +4,7 @@
 
 export type ToolName = "bash" | "read" | "edit" | "write";
 
-export type ActionKind = "skill" | "file" | "walkup" | "inline";
+export type ActionKind = "skill" | "file" | "walkup" | "inline" | "exec";
 
 /**
  * Raw shape of pi-cues.toml as authored by the user. This is the source of
@@ -32,9 +32,9 @@ export interface RawTrigger {
   tools: ToolName[];
   /** Predicate. Required for skill/file; optional for walkup (omitted = every listed path event matches). */
   when?: RawWhen;
-  /** skill: inject a pi skill (full text). file: inject a prompt file (truncated). walkup: collect context files up to the session cwd. inline: inject the target text itself. */
+  /** skill: inject a pi skill (full text). file: inject a prompt file (truncated). walkup: collect context files up to the session cwd. inline: inject the target text itself. exec: run the target as a shell command and inject its output (bash triggers only). */
   action: ActionKind;
-  /** skill: skill name(s). file: prompt file path(s), relative to the config directory (project configs must not escape it). walkup: context file name(s), e.g. AGENTS.md. inline: the literal markdown to inject. */
+  /** skill: skill name(s). file: prompt file path(s), relative to the config directory (project configs must not escape it). walkup: context file name(s), e.g. AGENTS.md. inline: the literal markdown to inject. exec: the command line(s) to run, executed as-is through pi's bash tool with no placeholder interpolation. */
   target: string | string[];
   /** walkup only: picomatch patterns matched against the collected file's path relative to the session cwd (POSIX separators). "README.md" matches only the cwd-level file; use a globstar pattern to match any depth. A leading bang (exclamation) prefix is rejected. */
   exclude?: string | string[];

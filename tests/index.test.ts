@@ -14,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-import piCues from "../src/piCues/index.js";
+import piCues, { execOperations, setExecOperations } from "../src/piCues/index.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -24,6 +24,9 @@ interface FakePi {
   sent: Array<{ message: any; options: any }>;
   commands: Map<string, { handler: (args: string, ctx: any) => Promise<void> }>;
   notices: string[];
+  /** Same toasts as `notices`, with their level: success and failure share the target label. */
+  alerts: Array<{ message: string; type: string | undefined }>;
+  notify: (message: string, type?: string) => void;
 }
 
 function createFakePi(skillPaths: Record<string, string> = {}): FakePi {
@@ -32,6 +35,11 @@ function createFakePi(skillPaths: Record<string, string> = {}): FakePi {
     sent: [],
     commands: new Map(),
     notices: [],
+    alerts: [],
+    notify: (message, type) => {
+      fake.notices.push(message);
+      fake.alerts.push({ message, type });
+    },
     pi: {
       on: (event: string, handler: any) => {
         fake.handlers.set(event, handler);
@@ -94,7 +102,7 @@ function setup(configToml: string | null, skillPaths: Record<string, string> = {
     cwd: project,
     hasUI: true,
     sessionManager: { getSessionId: () => "session-test-id" },
-    ui: { notify: (message: string) => fake.notices.push(message) },
+    ui: { notify: fake.notify },
   };
   fake.handlers.get("session_start")?.({ type: "session_start" }, ctx);
   return { fake, project, home, ctx };
@@ -142,7 +150,7 @@ afterEach(() => {
 });
 
 describe("skill cue", () => {
-  it("injects the skill block on a matching bash command, once per session", () => {
+  it("injects the skill block on a matching bash command, once per session", async () => {
     // #given jj → jj-cli trigger #when `jj log` runs twice #then one injection
     const skillPath = join(makeDir("pi-cues-it-skill-"), "SKILL.md");
     writeFile(skillPath, "---\nname: jj-cli\n---\n\nJJ body.");
@@ -152,15 +160,15 @@ describe("skill cue", () => {
     );
 
     const handler = fake.handlers.get("tool_result");
-    const first = handler?.(bashResult("jj log"), ctx);
+    const first = await handler?.(bashResult("jj log"), ctx);
     expect(injectedText(first)).toContain('<skill name="jj-cli"');
     expect(injectedText(first)).toContain("JJ body.");
 
-    const second = handler?.(bashResult("jj log"), ctx);
+    const second = await handler?.(bashResult("jj log"), ctx);
     expect(second).toBeUndefined();
   });
 
-  it("also fires for failed bash calls", () => {
+  it("also fires for failed bash calls", async () => {
     const skillPath = join(makeDir("pi-cues-it-skill-"), "SKILL.md");
     writeFile(skillPath, "body");
     const { fake, ctx } = setup(
@@ -168,17 +176,17 @@ describe("skill cue", () => {
       { "jj-cli": skillPath },
     );
     expect(
-      injectedText(fake.handlers.get("tool_result")?.(bashResult("jj bad-flag", true), ctx)),
+      injectedText(await fake.handlers.get("tool_result")?.(bashResult("jj bad-flag", true), ctx)),
     ).toContain('<skill name="jj-cli"');
   });
 
-  it("records a diagnostic and dedups when the skill is missing", () => {
+  it("records a diagnostic and dedups when the skill is missing", async () => {
     const { fake, ctx } = setup(
       `version = 1\n[[triggers]]\ntools = ["bash"]\nwhen.command = "jj"\naction = "skill"\ntarget = "ghost"\n`,
     );
     const handler = fake.handlers.get("tool_result");
-    expect(handler?.(bashResult("jj st"), ctx)).toBeUndefined();
-    expect(handler?.(bashResult("jj log"), ctx)).toBeUndefined();
+    expect(await handler?.(bashResult("jj st"), ctx)).toBeUndefined();
+    expect(await handler?.(bashResult("jj log"), ctx)).toBeUndefined();
 
     const status = fake.commands.get("cues");
     void status?.handler("status", ctx);
@@ -188,7 +196,7 @@ describe("skill cue", () => {
 });
 
 describe("file cue", () => {
-  it("injects a prompt file for a matching path, resolved relative to the config dir", () => {
+  it("injects a prompt file for a matching path, resolved relative to the config dir", async () => {
     const { fake, project, ctx } = setup(
       `version = 1\n[[triggers]]\ntools = ["read", "edit"]\nwhen.path = "mise.toml"\naction = "file"\ntarget = "./triggers/mise.md"\n`,
     );
@@ -198,26 +206,29 @@ describe("file cue", () => {
     );
     writeFile(join(project, "mise.toml"), "[tools]");
 
-    const result = fake.handlers.get("tool_result")?.(editResult(join(project, "mise.toml")), ctx);
+    const result = await fake.handlers.get("tool_result")?.(
+      editResult(join(project, "mise.toml")),
+      ctx,
+    );
     expect(injectedText(result)).toContain("Mise conventions.");
   });
 });
 
 describe("walkup cue", () => {
-  it("fires out of the box via the builtin default", () => {
+  it("fires out of the box via the builtin default", async () => {
     // #given no config file at all #when editing under a dir with AGENTS.md #then injected
     const { fake, project, ctx } = setup(null);
     writeFile(join(project, "src", "AGENTS.md"), "src rules");
     writeFile(join(project, "src", "a.ts"), "code");
 
-    const result = fake.handlers.get("tool_result")?.(
+    const result = await fake.handlers.get("tool_result")?.(
       editResult(join(project, "src", "a.ts")),
       ctx,
     );
     expect(injectedText(result)).toContain("src rules");
   });
 
-  it("collects nothing without an explicit trust decision", () => {
+  it("collects nothing without an explicit trust decision", async () => {
     const project = makeDir("pi-cues-it-project-");
     const home = makeDir("pi-cues-it-home-");
     process.env["PI_CODING_AGENT_DIR"] = join(home, ".pi", "agent");
@@ -227,18 +238,18 @@ describe("walkup cue", () => {
       cwd: project,
       hasUI: true,
       sessionManager: { getSessionId: () => "session-test-id" },
-      ui: { notify: (m: string) => fake.notices.push(m) },
+      ui: { notify: fake.notify },
     };
     fake.handlers.get("session_start")?.({ type: "session_start" }, ctx);
     writeFile(join(project, "AGENTS.md"), "root agents");
     writeFile(join(project, "a.ts"), "code");
 
-    const result = fake.handlers.get("tool_result")?.(editResult(join(project, "a.ts")), ctx);
+    const result = await fake.handlers.get("tool_result")?.(editResult(join(project, "a.ts")), ctx);
     expect(result).toBeUndefined();
     expect(fake.notices.some((n) => n.includes("no trust decision"))).toBe(true);
   });
 
-  it("collects nothing when the project trust decision is false", () => {
+  it("collects nothing when the project trust decision is false", async () => {
     const project = makeDir("pi-cues-it-project-");
     const home = makeDir("pi-cues-it-home-");
     writeFile(
@@ -252,18 +263,18 @@ describe("walkup cue", () => {
       cwd: project,
       hasUI: true,
       sessionManager: { getSessionId: () => "session-test-id" },
-      ui: { notify: (m: string) => fake.notices.push(m) },
+      ui: { notify: fake.notify },
     };
     fake.handlers.get("session_start")?.({ type: "session_start" }, ctx);
     writeFile(join(project, "AGENTS.md"), "root agents");
     writeFile(join(project, "a.ts"), "code");
 
-    const result = fake.handlers.get("tool_result")?.(editResult(join(project, "a.ts")), ctx);
+    const result = await fake.handlers.get("tool_result")?.(editResult(join(project, "a.ts")), ctx);
     expect(result).toBeUndefined();
     expect(fake.notices.some((n) => n.includes("trust declined"))).toBe(true);
   });
 
-  it("skips walk-up files matching exclude patterns", () => {
+  it("skips walk-up files matching exclude patterns", async () => {
     const { fake, project, ctx } = setup(
       `version = 1\n[[triggers]]\ntools = ["read", "edit"]\naction = "walkup"\ntarget = ["README.md"]\nexclude = "README.md"\n`,
     );
@@ -273,25 +284,25 @@ describe("walkup cue", () => {
 
     const text =
       injectedText(
-        fake.handlers.get("tool_result")?.(editResult(join(project, "sub", "a.ts")), ctx),
+        await fake.handlers.get("tool_result")?.(editResult(join(project, "sub", "a.ts")), ctx),
       ) ?? "";
     expect(text).toContain("sub readme");
     expect(text).not.toContain("root readme");
   });
 
-  it("stays silent with defaults = false and no user walkup trigger", () => {
+  it("stays silent with defaults = false and no user walkup trigger", async () => {
     const { fake, project, ctx } = setup("version = 1\ndefaults = false\n");
     writeFile(join(project, "src", "AGENTS.md"), "src rules");
     writeFile(join(project, "src", "a.ts"), "code");
 
-    const result = fake.handlers.get("tool_result")?.(
+    const result = await fake.handlers.get("tool_result")?.(
       editResult(join(project, "src", "a.ts")),
       ctx,
     );
     expect(result).toBeUndefined();
   });
 
-  it("injects each context file once across builtin and user walkup triggers", () => {
+  it("injects each context file once across builtin and user walkup triggers", async () => {
     const { fake, project, ctx } = setup(
       `version = 1\n[[triggers]]\ntools = ["edit"]\naction = "walkup"\ntarget = ["AGENTS.md", "CONTEXT.md"]\n`,
     );
@@ -299,14 +310,14 @@ describe("walkup cue", () => {
     writeFile(join(project, "CONTEXT.md"), "root context");
     writeFile(join(project, "a.ts"), "code");
 
-    const result = fake.handlers.get("tool_result")?.(editResult(join(project, "a.ts")), ctx);
+    const result = await fake.handlers.get("tool_result")?.(editResult(join(project, "a.ts")), ctx);
     const text = injectedText(result) ?? "";
     // #then AGENTS.md appears once despite matching both the default and the user trigger
     expect(text.match(/root agents/g)).toHaveLength(1);
     expect(text).toContain("root context");
   });
 
-  it("discovers context files of directories first touched later in the session", () => {
+  it("discovers context files of directories first touched later in the session", async () => {
     const { fake, project, ctx } = setup(null);
     writeFile(join(project, "one", "AGENTS.md"), "one rules");
     writeFile(join(project, "one", "a.ts"), "code");
@@ -314,16 +325,16 @@ describe("walkup cue", () => {
     writeFile(join(project, "two", "b.ts"), "code");
 
     const handler = fake.handlers.get("tool_result");
-    expect(injectedText(handler?.(editResult(join(project, "one", "a.ts")), ctx))).toContain(
+    expect(injectedText(await handler?.(editResult(join(project, "one", "a.ts")), ctx))).toContain(
       "one rules",
     );
     // #then a different directory's AGENTS.md still loads later
-    expect(injectedText(handler?.(editResult(join(project, "two", "b.ts")), ctx))).toContain(
+    expect(injectedText(await handler?.(editResult(join(project, "two", "b.ts")), ctx))).toContain(
       "two rules",
     );
   });
 
-  it("collects context files near to far and skips native ones", () => {
+  it("collects context files near to far and skips native ones", async () => {
     const { fake, project, ctx } = setup(
       `version = 1\n[[triggers]]\ntools = ["read", "edit", "write"]\naction = "walkup"\ntarget = "AGENTS.md"\n`,
     );
@@ -340,7 +351,7 @@ describe("walkup cue", () => {
       ctx,
     );
 
-    const result = fake.handlers.get("tool_result")?.(
+    const result = await fake.handlers.get("tool_result")?.(
       editResult(join(project, "src", "a.ts")),
       ctx,
     );
@@ -349,39 +360,39 @@ describe("walkup cue", () => {
     expect(text).not.toContain("root rules");
   });
 
-  it("keeps quiet when nothing is found", () => {
+  it("keeps quiet when nothing is found", async () => {
     const { fake, project, ctx } = setup(
       `version = 1\ndefaults = false\n[[triggers]]\ntools = ["edit"]\naction = "walkup"\ntarget = "AGENTS.md"\n`,
     );
     writeFile(join(project, "empty", "a.ts"), "code");
 
     const handler = fake.handlers.get("tool_result");
-    expect(handler?.(editResult(join(project, "empty", "a.ts")), ctx)).toBeUndefined();
+    expect(await handler?.(editResult(join(project, "empty", "a.ts")), ctx)).toBeUndefined();
 
     writeFile(join(project, "full", "AGENTS.md"), "late rules");
     writeFile(join(project, "full", "b.ts"), "code");
-    const result = handler?.(editResult(join(project, "full", "b.ts")), ctx);
+    const result = await handler?.(editResult(join(project, "full", "b.ts")), ctx);
     expect(injectedText(result)).toContain("late rules");
   });
 });
 
 describe("inline cue", () => {
-  it("injects the target text itself, once per session", () => {
+  it("injects the target text itself, once per session", async () => {
     // #given an inline trigger on jj #when jj runs twice #then the text is injected once
     const { fake, ctx } = setup(
       `version = 1\n[[triggers]]\ntools = ["bash"]\nwhen.command = "jj"\naction = "inline"\ntarget = "Commit messages in Chinese."\n`,
     );
     const handler = fake.handlers.get("tool_result");
-    const first = handler?.(bashResult("jj st"), ctx);
+    const first = await handler?.(bashResult("jj st"), ctx);
     expect(injectedText(first)).toContain("Commit messages in Chinese.");
     expect(injectedText(first)).toContain('<pi-cues action="inline" trigger="command jj"');
     expect(injectedText(first)).toContain("source=");
-    expect(handler?.(bashResult("jj log"), ctx)).toBeUndefined();
+    expect(await handler?.(bashResult("jj log"), ctx)).toBeUndefined();
   });
 });
 
 describe("user_bash cues", () => {
-  it("queues matched cues for the next turn instead of interrupting", () => {
+  it("queues matched cues for the next turn instead of interrupting", async () => {
     const skillPath = join(makeDir("pi-cues-it-skill-"), "SKILL.md");
     writeFile(skillPath, "body");
     const { fake, ctx } = setup(
@@ -390,7 +401,7 @@ describe("user_bash cues", () => {
     );
 
     const handler = fake.handlers.get("user_bash");
-    const result = handler?.(
+    const result = await handler?.(
       { type: "user_bash", command: "jj log", excludeFromContext: false, cwd: ctx.cwd },
       ctx,
     );
@@ -400,14 +411,14 @@ describe("user_bash cues", () => {
     expect(fake.sent[0]?.message.content).toContain('<skill name="jj-cli"');
   });
 
-  it("ignores !! commands excluded from context", () => {
+  it("ignores !! commands excluded from context", async () => {
     const skillPath = join(makeDir("pi-cues-it-skill-"), "SKILL.md");
     writeFile(skillPath, "body");
     const { fake, ctx } = setup(
       `version = 1\n[[triggers]]\ntools = ["bash"]\nwhen.command = "jj"\naction = "skill"\ntarget = "jj-cli"\n`,
       { "jj-cli": skillPath },
     );
-    fake.handlers.get("user_bash")?.(
+    await fake.handlers.get("user_bash")?.(
       { type: "user_bash", command: "jj log", excludeFromContext: true, cwd: ctx.cwd },
       ctx,
     );
@@ -416,7 +427,7 @@ describe("user_bash cues", () => {
 });
 
 describe("trust and attribution", () => {
-  it("ignores project config and notifies when the project is untrusted", () => {
+  it("ignores project config and notifies when the project is untrusted", async () => {
     const project = makeDir("pi-cues-it-project-");
     const home = makeDir("pi-cues-it-home-");
     writeFile(
@@ -431,31 +442,32 @@ describe("trust and attribution", () => {
       hasUI: true,
       isProjectTrusted: () => false,
       sessionManager: { getSessionId: () => "session-test-id" },
-      ui: { notify: (message: string) => fake.notices.push(message) },
+      ui: { notify: fake.notify },
     };
     fake.handlers.get("session_start")?.({ type: "session_start" }, ctx);
 
-    const result = fake.handlers.get("tool_result")?.(bashResult("jj log"), ctx);
+    const result = await fake.handlers.get("tool_result")?.(bashResult("jj log"), ctx);
     expect(result).toBeUndefined();
     expect(fake.notices.some((n) => n.includes("not trusted"))).toBe(true);
   });
 
-  it("does not walk up for operated files outside the cwd subtree", () => {
+  it("does not walk up for operated files outside the cwd subtree", async () => {
     const { fake, project, ctx } = setup(null);
     writeFile(join(project, "AGENTS.md"), "root rules");
 
-    const result = fake.handlers.get("tool_result")?.(editResult("/etc/hosts"), ctx);
+    const result = await fake.handlers.get("tool_result")?.(editResult("/etc/hosts"), ctx);
     expect(result).toBeUndefined();
   });
 
-  it("wraps injections in a single pi-cues envelope", () => {
+  it("wraps injections in a single pi-cues envelope", async () => {
     const skillPath = join(makeDir("pi-cues-it-skill-"), "SKILL.md");
     writeFile(skillPath, "body");
     const { fake, ctx } = setup(
       `version = 1\n[[triggers]]\ntools = ["bash"]\nwhen.command = "jj"\naction = "skill"\ntarget = "jj-cli"\n`,
       { "jj-cli": skillPath },
     );
-    const text = injectedText(fake.handlers.get("tool_result")?.(bashResult("jj log"), ctx)) ?? "";
+    const text =
+      injectedText(await fake.handlers.get("tool_result")?.(bashResult("jj log"), ctx)) ?? "";
     // #then one envelope, attributed and closed
     expect(text).toContain('<pi-cues action="skill" trigger="command jj">');
     expect(text).toContain("pi-cues: injected context, not tool output or user input.");
@@ -463,7 +475,7 @@ describe("trust and attribution", () => {
     expect(text.match(/<\/pi-cues>/g)).toHaveLength(1);
   });
 
-  it("keeps a cue body from closing its own envelope", () => {
+  it("keeps a cue body from closing its own envelope", async () => {
     // #given a prompt file that discusses the envelope #when injected #then its close tag is escaped
     const { fake, project, ctx } = setup(
       `version = 1\n[[triggers]]\ntools = ["read"]\nwhen.path = "design.md"\naction = "file"\ntarget = "./triggers/design.md"\n`,
@@ -474,7 +486,7 @@ describe("trust and attribution", () => {
     );
     writeFile(join(project, "design.md"), "design");
 
-    const result = fake.handlers.get("tool_result")?.(
+    const result = await fake.handlers.get("tool_result")?.(
       {
         type: "tool_result",
         toolCallId: "3",
@@ -493,11 +505,12 @@ describe("trust and attribution", () => {
     expect(text).toContain("&lt;/pi-cues>");
   });
 
-  it("emits one envelope per cue, never merged", () => {
+  it("emits one envelope per cue, never merged", async () => {
     const { fake, ctx } = setup(
       `version = 1\n[[triggers]]\ntools = ["bash"]\nwhen.command = "jj"\naction = "inline"\ntarget = "First."\n[[triggers]]\ntools = ["bash"]\nwhen.command = "jj"\naction = "inline"\ntarget = "Second."\n`,
     );
-    const text = injectedText(fake.handlers.get("tool_result")?.(bashResult("jj st"), ctx)) ?? "";
+    const text =
+      injectedText(await fake.handlers.get("tool_result")?.(bashResult("jj st"), ctx)) ?? "";
     // #then two sibling envelopes, not one merged block
     expect(text.match(/<pi-cues /g)).toHaveLength(2);
     expect(text.match(/<\/pi-cues>/g)).toHaveLength(2);
@@ -505,7 +518,7 @@ describe("trust and attribution", () => {
     expect(text).toContain("Second.");
   });
 
-  it("puts every walk-up file of one cue into one envelope", () => {
+  it("puts every walk-up file of one cue into one envelope", async () => {
     const { fake, project, ctx } = setup(
       `version = 1\ndefaults = false\n[[triggers]]\ntools = ["edit"]\naction = "walkup"\ntarget = "AGENTS.md"\n`,
     );
@@ -515,14 +528,14 @@ describe("trust and attribution", () => {
 
     const text =
       injectedText(
-        fake.handlers.get("tool_result")?.(editResult(join(project, "src", "a.ts")), ctx),
+        await fake.handlers.get("tool_result")?.(editResult(join(project, "src", "a.ts")), ctx),
       ) ?? "";
     // #then one walkup envelope carrying both files
     expect(text.match(/<pi-cues action="walkup" trigger="path /g)).toHaveLength(1);
     expect(text.match(/<file path=/g)).toHaveLength(2);
   });
 
-  it("announces pi-cues once in the system prompt", () => {
+  it("announces pi-cues once in the system prompt", async () => {
     const { fake, ctx } = setup(null);
     const result = fake.handlers.get("before_agent_start")?.(
       { type: "before_agent_start", systemPrompt: "BASE", systemPromptOptions: {} },
@@ -534,7 +547,7 @@ describe("trust and attribution", () => {
 });
 
 describe("session lifecycle", () => {
-  it("re-fires cues after compaction", () => {
+  it("re-fires cues after compaction", async () => {
     const skillPath = join(makeDir("pi-cues-it-skill-"), "SKILL.md");
     writeFile(skillPath, "body");
     const { fake, ctx } = setup(
@@ -543,14 +556,16 @@ describe("session lifecycle", () => {
     );
 
     const handler = fake.handlers.get("tool_result");
-    handler?.(bashResult("jj log"), ctx);
-    expect(handler?.(bashResult("jj log"), ctx)).toBeUndefined();
+    await handler?.(bashResult("jj log"), ctx);
+    expect(await handler?.(bashResult("jj log"), ctx)).toBeUndefined();
 
     fake.handlers.get("session_compact")?.({ type: "session_compact" }, ctx);
-    expect(injectedText(handler?.(bashResult("jj log"), ctx))).toContain('<skill name="jj-cli"');
+    expect(injectedText(await handler?.(bashResult("jj log"), ctx))).toContain(
+      '<skill name="jj-cli"',
+    );
   });
 
-  it("notifies config diagnostics on session start", () => {
+  it("notifies config diagnostics on session start", async () => {
     const { fake } = setup('version = 1\n[[triggers]]\ntools = ["bash"]\naction = "skill"\n');
     expect(fake.notices.some((n) => n.includes("pi-cues:"))).toBe(true);
   });
@@ -568,7 +583,7 @@ describe("telemetry", () => {
       .map((line) => JSON.parse(line) as Record<string, unknown>);
   }
 
-  it("appends one event per fired cue, tagged with the pi session id", () => {
+  it("appends one event per fired cue, tagged with the pi session id", async () => {
     // #given a jj → jj-cli trigger #when `jj log` runs twice #then one event, deduped like the injection
     const cache = makeDir("pi-cues-it-cache-");
     process.env["XDG_CACHE_HOME"] = cache;
@@ -580,8 +595,8 @@ describe("telemetry", () => {
     );
 
     const handler = fake.handlers.get("tool_result");
-    handler?.(bashResult("jj log"), ctx);
-    handler?.(bashResult("jj log"), ctx);
+    await handler?.(bashResult("jj log"), ctx);
+    await handler?.(bashResult("jj log"), ctx);
 
     const events = readEvents(cache);
     expect(events).toHaveLength(1);
@@ -594,19 +609,19 @@ describe("telemetry", () => {
     expect(typeof events[0]?.["ts"]).toBe("string");
   });
 
-  it("records failed loads as loaded: false", () => {
+  it("records failed loads as loaded: false", async () => {
     const cache = makeDir("pi-cues-it-cache-");
     process.env["XDG_CACHE_HOME"] = cache;
     const { fake, ctx } = setup(
       `version = 1\n[[triggers]]\ntools = ["bash"]\nwhen.command = "jj"\naction = "skill"\ntarget = "ghost"\n`,
     );
 
-    fake.handlers.get("tool_result")?.(bashResult("jj st"), ctx);
+    await fake.handlers.get("tool_result")?.(bashResult("jj st"), ctx);
 
     expect(readEvents(cache)[0]).toMatchObject({ action: "skill", target: "ghost", loaded: false });
   });
 
-  it("writes nothing when the global config disables telemetry", () => {
+  it("writes nothing when the global config disables telemetry", async () => {
     const cache = makeDir("pi-cues-it-cache-");
     process.env["XDG_CACHE_HOME"] = cache;
     const { fake, home, ctx } = setup(
@@ -618,14 +633,230 @@ describe("telemetry", () => {
     );
     fake.handlers.get("session_start")?.({ type: "session_start" }, ctx);
 
-    fake.handlers.get("tool_result")?.(bashResult("jj st"), ctx);
+    await fake.handlers.get("tool_result")?.(bashResult("jj st"), ctx);
 
     expect(existsSync(join(cache, "pi-cues"))).toBe(false);
   });
 });
 
+describe("exec cue", () => {
+  let savedOperations: typeof execOperations;
+
+  beforeEach(() => {
+    savedOperations = execOperations;
+  });
+
+  afterEach(() => {
+    setExecOperations(savedOperations);
+  });
+
+  function stubOperations(
+    behavior: (
+      command: string,
+      cwd: string,
+      options: { onData: (data: Buffer) => void; timeout?: number },
+    ) => Promise<{ exitCode: number | null }>,
+  ): Array<{ command: string; cwd: string; timeout?: number }> {
+    const calls: Array<{ command: string; cwd: string; timeout?: number }> = [];
+    setExecOperations({
+      exec: (command, cwd, options) => {
+        calls.push({ command, cwd, timeout: options.timeout });
+        return behavior(command, cwd, options);
+      },
+    });
+    return calls;
+  }
+
+  function flush(): Promise<void> {
+    return new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
+  }
+
+  it("runs the target through bash operations and appends the output to the same tool result", async () => {
+    // #given jj → exec `jj edit --help` #when `jj log` runs #then the envelope rides the tool result
+    const calls = stubOperations((command, _cwd, { onData }) => {
+      expect(command).toBe("jj edit --help");
+      onData(Buffer.from("Usage: jj edit [REVSET]\n"));
+      return Promise.resolve({ exitCode: 0 });
+    });
+    const { fake, ctx } = setup(
+      `version = 1\n[[triggers]]\ntools = ["bash"]\nwhen.command = "jj"\naction = "exec"\ntarget = "jj edit --help"\n`,
+    );
+
+    const result = await fake.handlers.get("tool_result")?.(bashResult("jj log"), ctx);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.cwd).toBe(ctx.cwd);
+    expect(calls[0]?.timeout).toBeGreaterThan(0);
+    // #then nothing goes out of band: the model sees the help in this very result
+    expect(fake.sent).toHaveLength(0);
+    const content = injectedText(result) ?? "";
+    expect(content).toContain('<pi-cues action="exec" trigger="command jj">');
+    expect(content).toContain('<file path="jj edit --help">');
+    expect(content).toContain("Usage: jj edit [REVSET]");
+  });
+
+  it("fires once per session and dedups against itself", async () => {
+    const calls = stubOperations((_command, _cwd, { onData }) => {
+      onData(Buffer.from("help text"));
+      return Promise.resolve({ exitCode: 0 });
+    });
+    const { fake, ctx } = setup(
+      `version = 1\n[[triggers]]\ntools = ["bash"]\nwhen.command = "jj"\naction = "exec"\ntarget = "jj edit --help"\n`,
+    );
+
+    const handler = fake.handlers.get("tool_result");
+    const first = await handler?.(bashResult("jj st"), ctx);
+    const second = await handler?.(bashResult("jj log"), ctx);
+
+    expect(calls).toHaveLength(1);
+    expect(injectedText(first)).toContain("help text");
+    expect(second).toBeUndefined();
+    expect(fake.alerts).toContainEqual({
+      message: 'pi-cues: injected "jj edit --help" (exec)',
+      type: "info",
+    });
+  });
+
+  it("reports the outcome once the command has actually finished", async () => {
+    // #given an exec cue whose command takes a while
+    let settle: ((value: { exitCode: number }) => void) | undefined;
+    stubOperations((_command, _cwd, { onData }) => {
+      onData(Buffer.from("Usage: jj edit [REVSET]\n"));
+      return new Promise((resolvePromise) => {
+        settle = resolvePromise;
+      });
+    });
+    const { fake, ctx } = setup(
+      `version = 1\n[[triggers]]\ntools = ["bash"]\nwhen.command = "jj"\naction = "exec"\ntarget = "jj edit --help"\n`,
+    );
+
+    // #when the tool event is handled #then it waits for the command, so the toast
+    // that follows already knows the outcome
+    const inFlight = fake.handlers.get("tool_result")?.(bashResult("jj st"), ctx);
+    await flush();
+    expect(fake.alerts).toEqual([]);
+
+    settle?.({ exitCode: 0 });
+    await inFlight;
+    expect(fake.alerts).toEqual([
+      { message: 'pi-cues: injected "jj edit --help" (exec)', type: "info" },
+    ]);
+  });
+
+  it("toasts a failed exec cue as a failure", async () => {
+    stubOperations(() => Promise.resolve({ exitCode: 1 }));
+    const { fake, ctx } = setup(
+      `version = 1\n[[triggers]]\ntools = ["bash"]\nwhen.command = "jj"\naction = "exec"\ntarget = "jj nope"\n`,
+    );
+
+    const result = await fake.handlers.get("tool_result")?.(bashResult("jj st"), ctx);
+
+    // #then no envelope is injected, and the toast says so
+    expect(result).toBeUndefined();
+    expect(fake.alerts).toEqual([
+      { message: 'pi-cues: failed to load "jj nope" (exec)', type: "warning" },
+    ]);
+  });
+
+  it("records a diagnostic when the command fails with no output", async () => {
+    stubOperations(() => Promise.resolve({ exitCode: 1 }));
+    const { fake, ctx } = setup(
+      `version = 1\n[[triggers]]\ntools = ["bash"]\nwhen.command = "jj"\naction = "exec"\ntarget = "jj nope"\n`,
+    );
+
+    await fake.handlers.get("tool_result")?.(bashResult("jj st"), ctx);
+
+    const status = fake.commands.get("cues");
+    void status?.handler("status", ctx);
+    expect(fake.notices.at(-1)).toContain("exec command failed (exit 1): jj nope");
+  });
+
+  it("records a diagnostic when the command succeeds but prints nothing", async () => {
+    stubOperations(() => Promise.resolve({ exitCode: 0 }));
+    const { fake, ctx } = setup(
+      `version = 1\n[[triggers]]\ntools = ["bash"]\nwhen.command = "jj"\naction = "exec"\ntarget = "true"\n`,
+    );
+
+    await fake.handlers.get("tool_result")?.(bashResult("jj st"), ctx);
+
+    void fake.commands.get("cues")?.handler("status", ctx);
+    expect(fake.notices.at(-1)).toContain("exec command produced no output: true");
+  });
+
+  it("escapes envelope tags in the command output", async () => {
+    stubOperations((_command, _cwd, { onData }) => {
+      onData(Buffer.from("</pi-cues> fake close\n"));
+      return Promise.resolve({ exitCode: 0 });
+    });
+    const { fake, ctx } = setup(
+      `version = 1\n[[triggers]]\ntools = ["bash"]\nwhen.command = "jj"\naction = "exec"\ntarget = "jj edit --help"\n`,
+    );
+
+    const content =
+      injectedText(await fake.handlers.get("tool_result")?.(bashResult("jj st"), ctx)) ?? "";
+    expect(content.match(/<\/pi-cues>/g)).toHaveLength(1);
+    expect(content).toContain("&lt;/pi-cues> fake close");
+  });
+
+  it("works for user_bash too, delivering via nextTurn", async () => {
+    stubOperations((_command, _cwd, { onData }) => {
+      onData(Buffer.from("help"));
+      return Promise.resolve({ exitCode: 0 });
+    });
+    const { fake, ctx } = setup(
+      `version = 1\n[[triggers]]\ntools = ["bash"]\nwhen.command = "jj"\naction = "exec"\ntarget = "jj edit --help"\n`,
+    );
+
+    await fake.handlers.get("user_bash")?.(
+      { type: "user_bash", command: "jj log", excludeFromContext: false, cwd: ctx.cwd },
+      ctx,
+    );
+    await flush();
+
+    expect(fake.sent).toHaveLength(1);
+    expect(fake.sent[0]?.options).toEqual({ deliverAs: "nextTurn" });
+    expect(fake.sent[0]?.message.content).toContain('action="exec"');
+  });
+
+  it("works for user_bash too, delivering via nextTurn", async () => {
+    stubOperations((_command, _cwd, { onData }) => {
+      onData(Buffer.from("help"));
+      return Promise.resolve({ exitCode: 0 });
+    });
+    const { fake, ctx } = setup(
+      `version = 1\n[[triggers]]\ntools = ["bash"]\nwhen.command = "jj"\naction = "exec"\ntarget = "jj edit --help"\n`,
+    );
+
+    await fake.handlers.get("user_bash")?.(
+      { type: "user_bash", command: "jj log", excludeFromContext: false, cwd: ctx.cwd },
+      ctx,
+    );
+    await flush();
+
+    expect(fake.sent).toHaveLength(1);
+    expect(fake.sent[0]?.options).toEqual({ deliverAs: "nextTurn" });
+    expect(fake.sent[0]?.message.content).toContain('action="exec"');
+  });
+
+  it("rejects exec triggers on path tools", async () => {
+    const { fake } = setup(
+      `version = 1\n[[triggers]]\ntools = ["read"]\naction = "exec"\ntarget = "echo hi"\n`,
+    );
+    expect(fake.notices.some((n) => n.includes("exec triggers must listen to bash only"))).toBe(
+      true,
+    );
+  });
+
+  it("rejects exec triggers without when.command", async () => {
+    const { fake } = setup(
+      `version = 1\n[[triggers]]\ntools = ["bash"]\naction = "exec"\ntarget = "echo hi"\n`,
+    );
+    expect(fake.notices.some((n) => n.includes("exec triggers require when.command"))).toBe(true);
+  });
+});
+
 describe("injection notify", () => {
-  it("notifies once per tool event with the injected targets", () => {
+  it("notifies once per tool event with the injected targets", async () => {
     const skillPath = join(makeDir("pi-cues-it-skill-"), "SKILL.md");
     writeFile(skillPath, "body");
     const { fake, ctx } = setup(
@@ -633,22 +864,22 @@ describe("injection notify", () => {
       { "jj-cli": skillPath },
     );
 
-    fake.handlers.get("tool_result")?.(bashResult("jj log"), ctx);
+    await fake.handlers.get("tool_result")?.(bashResult("jj log"), ctx);
 
     expect(fake.notices).toContain("pi-cues: injected jj-cli (skill)");
   });
 
-  it("notifies failed loads as a warning", () => {
+  it("notifies failed loads as a warning", async () => {
     const { fake, ctx } = setup(
       `version = 1\n[[triggers]]\ntools = ["bash"]\nwhen.command = "jj"\naction = "skill"\ntarget = "ghost"\n`,
     );
 
-    fake.handlers.get("tool_result")?.(bashResult("jj st"), ctx);
+    await fake.handlers.get("tool_result")?.(bashResult("jj st"), ctx);
 
     expect(fake.notices).toContain("pi-cues: failed to load ghost (skill)");
   });
 
-  it("notifies for user_bash injections too", () => {
+  it("notifies for user_bash injections too", async () => {
     const skillPath = join(makeDir("pi-cues-it-skill-"), "SKILL.md");
     writeFile(skillPath, "body");
     const { fake, ctx } = setup(
@@ -656,7 +887,7 @@ describe("injection notify", () => {
       { "jj-cli": skillPath },
     );
 
-    fake.handlers.get("user_bash")?.(
+    await fake.handlers.get("user_bash")?.(
       { type: "user_bash", command: "jj log", excludeFromContext: false, cwd: ctx.cwd },
       ctx,
     );
@@ -665,12 +896,12 @@ describe("injection notify", () => {
     expect(fake.sent).toHaveLength(1);
   });
 
-  it("stays quiet when nothing fires", () => {
+  it("stays quiet when nothing fires", async () => {
     const { fake, ctx } = setup(
       `version = 1\n[[triggers]]\ntools = ["bash"]\nwhen.command = "jj"\naction = "skill"\ntarget = "jj-cli"\n`,
     );
 
-    fake.handlers.get("tool_result")?.(bashResult("ls -la"), ctx);
+    await fake.handlers.get("tool_result")?.(bashResult("ls -la"), ctx);
 
     expect(fake.notices.some((n) => n.startsWith("pi-cues: injected"))).toBe(false);
     expect(fake.notices.some((n) => n.startsWith("pi-cues: failed"))).toBe(false);

@@ -1,12 +1,16 @@
 /**
  * Extension entry point: hooks `tool_result` / `user_bash`, loads config,
  * matches triggers, injects cue content, and registers `/cues`.
+ *
+ * `tool_result` handlers may be async (pi awaits them), so exec cues run their
+ * command inside the handler and append the envelope to that very tool result
+ * (ADR 0013). Only `user_bash` has no content channel and must deliver later.
  */
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { BashOperations, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { loadConfig, type LoadedConfig } from "./config.js";
 import {
@@ -41,7 +45,25 @@ import {
 /** Blank line between sibling envelopes: one cue, one envelope, never merged. */
 const ENVELOPE_SEPARATOR = "\n\n";
 
+/** Cap on how long an exec cue command may run before it is killed. */
+const EXEC_TIMEOUT_MS = 10_000;
+
+/**
+ * Bash execution backend for exec cues: pi's own local shell operations, so
+ * cue commands run in the same shell as the bash tool. Tests may inject a
+ * stub by assigning this before the extension factory runs.
+ */
+export let execOperations: BashOperations | undefined;
+
+/** Test hook: replace or restore the exec backend. */
+export function setExecOperations(operations: BashOperations | undefined): void {
+  execOperations = operations;
+}
+
 export default function piCues(pi: ExtensionAPI): void {
+  /** Lazily created on the first exec firing: see resolveOperations(). */
+  let operationsPromise: Promise<BashOperations> | undefined;
+  let operationsFailure: string | undefined;
   let config: LoadedConfig = {
     triggers: [],
     diagnostics: [],
@@ -113,12 +135,12 @@ export default function piCues(pi: ExtensionAPI): void {
     };
   });
 
-  pi.on("tool_result", (event, ctx) => {
+  pi.on("tool_result", async (event, ctx) => {
     try {
       const firedBefore = session.triggered.length;
       const texts =
         event.toolName === "bash"
-          ? fireBashTriggers(commandInput(event), ctx.cwd)
+          ? await fireBashTriggers(commandInput(event), ctx, "inline")
           : firePathTriggers(extractToolPaths(event, ctx.cwd), ctx.cwd);
       notifyCueFirings(ctx, session.triggered.slice(firedBefore));
       if (texts.length === 0) {
@@ -139,12 +161,28 @@ export default function piCues(pi: ExtensionAPI): void {
 
   pi.on("user_bash", (event, ctx) => {
     // A throwing user_bash handler blocks the user's command; swallow everything.
+    // The handler also must not wait: pi emits this event before running the
+    // command, so awaiting an exec cue would delay the user's own shell. The
+    // deferred delivery (ADR 0006) already implies the envelope lands later.
     try {
       if (event.excludeFromContext) {
         return undefined;
       }
-      const firedBefore = session.triggered.length;
-      const texts = fireBashTriggers(extractCommands(event.command), ctx.cwd);
+      void fireDeferredBashTriggers(extractCommands(event.command), ctx);
+    } catch {
+      // intentional
+    }
+    return undefined;
+  });
+
+  /** Match bash triggers for user_bash and deliver every envelope as one nextTurn message. */
+  async function fireDeferredBashTriggers(
+    commandNames: string[],
+    ctx: NotifyContext,
+  ): Promise<void> {
+    const firedBefore = session.triggered.length;
+    try {
+      const texts = await fireBashTriggers(commandNames, ctx, "nextTurn");
       notifyCueFirings(ctx, session.triggered.slice(firedBefore));
       if (texts.length > 0) {
         pi.sendMessage(
@@ -153,10 +191,9 @@ export default function piCues(pi: ExtensionAPI): void {
         );
       }
     } catch {
-      // intentional
+      // A failed cue must not surface as an unhandled rejection.
     }
-    return undefined;
-  });
+  }
 
   pi.registerCommand("cues", {
     description: "Show pi-cues status (config, diagnostics, triggered cues).",
@@ -174,7 +211,18 @@ export default function piCues(pi: ExtensionAPI): void {
     return typeof command === "string" ? extractCommands(command) : [];
   }
 
-  function fireBashTriggers(commandNames: string[], cwd: string): string[] {
+  /**
+   * Match bash triggers and produce their envelopes. Exec cues are awaited
+   * here: inside `tool_result` the subprocess runs in the handler and its
+   * output joins the tool result the model is about to see (ADR 0013).
+   * `user_bash` has no content channel and no agent turn in flight, so it
+   * collects the same envelopes and delivers them as one nextTurn message.
+   */
+  async function fireBashTriggers(
+    commandNames: string[],
+    ctx: NotifyContext,
+    delivery: "inline" | "nextTurn",
+  ): Promise<string[]> {
     if (commandNames.length === 0) {
       return [];
     }
@@ -189,13 +237,113 @@ export default function piCues(pi: ExtensionAPI): void {
         continue;
       }
       for (const target of trigger.targets) {
-        const text = executeTarget(trigger, target, cwd, `command ${matchedCommand}`);
+        const text =
+          trigger.action === "exec"
+            ? await runExecTarget(trigger, target, ctx, `command ${matchedCommand}`, delivery)
+            : executeTarget(trigger, target, ctx.cwd, `command ${matchedCommand}`);
         if (text !== null) {
           texts.push(text);
         }
       }
     }
     return texts;
+  }
+
+  /**
+   * Claim the exec target and run its command. Delivery decides the channel:
+   * `inline` returns the envelope for the current tool result (the default for
+   * tool-triggered cues), `nextTurn` sends it as a display:false message
+   * because user_bash cannot attach content to anything.
+   *
+   * The record is created here and settled before this returns, so the
+   * per-event toast sees the real outcome.
+   */
+  async function runExecTarget(
+    trigger: Trigger,
+    target: string,
+    ctx: NotifyContext,
+    triggerLabel: string,
+    delivery: "inline" | "nextTurn",
+  ): Promise<string | null> {
+    const record = claimOnce(session, dedupKey("exec", target), {
+      action: "exec",
+      target,
+      source: trigger.source,
+      loaded: false,
+    });
+    if (record === undefined) {
+      return null;
+    }
+    let envelope: string | null = null;
+    try {
+      envelope = await execEnvelope(record, ctx.cwd, triggerLabel);
+      record.loaded = envelope !== null;
+      if (envelope !== null && delivery === "nextTurn") {
+        pi.sendMessage(
+          { customType: "pi-cues", content: envelope, display: false },
+          { deliverAs: "nextTurn" },
+        );
+      }
+    } catch (error) {
+      diagnose(
+        `exec command failed to run: ${record.target} (${error instanceof Error ? error.message : String(error)})`,
+        record.source,
+      );
+    }
+    logTelemetry(record);
+    return delivery === "inline" ? envelope : null;
+  }
+
+  /** Run one exec command and format its output as an envelope, or null when it produced nothing. */
+  async function execEnvelope(
+    record: TriggeredRecord,
+    cwd: string,
+    triggerLabel: string,
+  ): Promise<string | null> {
+    const ops = await resolveOperations();
+    const chunks: Buffer[] = [];
+    const { exitCode } = await ops.exec(record.target, cwd, {
+      onData: (data) => chunks.push(data),
+      timeout: EXEC_TIMEOUT_MS,
+    });
+    const output = Buffer.concat(chunks).toString("utf8").trimEnd();
+    if (output === "") {
+      diagnose(
+        exitCode === 0
+          ? `exec command produced no output: ${record.target}`
+          : `exec command failed (exit ${exitCode ?? "killed"}): ${record.target}`,
+        record.source,
+      );
+      return null;
+    }
+    const meta = { action: "exec" as const, trigger: triggerLabel };
+    const content = formatFileBlock([{ path: record.target, body: output }], bodyBudget(meta));
+    return content === "" ? null : formatEnvelope(meta, content);
+  }
+
+  /**
+   * exec needs pi's bash operations, which the coding-agent package only
+   * exports from its root — and that root also eagerly loads codemode, which
+   * fails to import under some dependency resolutions (pi 1.1 with
+   * pi-codemode 1.2 misses MCP_TYPESCRIPT_PREAMBLE). A static import would
+   * kill the whole extension there, so exec resolves the module lazily and
+   * degrades to a per-target diagnostic instead. Tests inject the stub
+   * through `execOperations`, skipping this entirely.
+   */
+  function resolveOperations(): Promise<BashOperations> {
+    if (execOperations !== undefined) {
+      return Promise.resolve(execOperations);
+    }
+    if (operationsFailure !== undefined) {
+      return Promise.reject(new Error(operationsFailure));
+    }
+    operationsPromise ??= import("@earendil-works/pi-coding-agent")
+      .then((module) => module.createLocalBashOperations())
+      .catch((error: unknown) => {
+        operationsFailure = error instanceof Error ? error.message : String(error);
+        throw new Error(operationsFailure);
+      });
+    return operationsPromise;
   }
 
   function firePathTriggers(paths: string[], cwd: string): string[] {
@@ -420,7 +568,11 @@ export default function piCues(pi: ExtensionAPI): void {
   function cueLabel(record: TriggeredRecord, cwd: string): string {
     if (record.action === "inline") {
       const firstLine = record.target.split("\n")[0] ?? "";
-      return `inline "${firstLine.length > 32 ? `${firstLine.slice(0, 31)}…` : firstLine}"`;
+      return `inline "${firstLine.length > 32 ? `${firstLine.slice(0, 31)}…` : firstLine}"`;
+    }
+    if (record.action === "exec") {
+      const label = record.target.length > 40 ? `${record.target.slice(0, 39)}…` : record.target;
+      return `"${label}" (exec)`;
     }
     return `${displayPath(cwd, record.target)} (${record.action})`;
   }

@@ -75,6 +75,18 @@ when.command = "jj"
 action = "inline"
 target = "Write commit messages in Chinese."
 
+# Running `jj ...` runs a command and injects its output — the classic case
+# is pulling the exact help text of the subcommand in play. exec targets are
+# literal command lines (no placeholder interpolation), run through pi's own
+# bash shell in the session cwd, truncated to the usual budget, and appended
+# to that tool result once the command settles. Keep them fast: the command
+# adds its own runtime to the bash call.
+[[triggers]]
+tools = ["bash"]
+when.command = "jj"
+action = "exec"
+target = "jj edit --help"
+
 # Any path operation walks up to the session cwd collecting context files
 [[triggers]]
 tools = ["read", "edit", "write"]
@@ -106,7 +118,7 @@ Walk-up collection — builtin and configured — only runs for projects with an
 
 The package also bundles the `pi-cues-authoring` skill, which teaches the agent how to author context for pi-cues (form choice, location-as-scope, wiring discipline).
 
-Security: project config loads only when the project is trusted (pi's project trust); project `file` targets must stay inside the config directory; walk-up never fires for files outside the session cwd. Every injection is wrapped in a `<pi-cues action=… trigger=…>…</pi-cues>` envelope whose first line states it is injected context rather than tool output, and the system prompt gains [one line per session](https://github.com/YewFence/pi-cues/blob/main/src/piCues/index.ts#L107) describing the envelope.
+Security: project config loads only when the project is trusted (pi's project trust); project `file` targets must stay inside the config directory; walk-up never fires for files outside the session cwd. `exec` targets run as literal shell commands with your user permissions in pi's bash shell — a trusted project's config can therefore run anything you can, so treat an unfamiliar project's `exec` triggers the way you treat its build scripts. The command is awaited inside the tool result, so a slow one lengthens that bash call; keep `exec` targets to fast commands such as `--help`. Every injection is wrapped in a `<pi-cues action=… trigger=…>…</pi-cues>` envelope whose first line states it is injected context rather than tool output, and the system prompt gains [one line per session](https://github.com/YewFence/pi-cues/blob/main/src/piCues/index.ts#L107) describing the envelope.
 
 ## Development
 
