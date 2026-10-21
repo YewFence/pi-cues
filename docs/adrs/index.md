@@ -15,3 +15,4 @@ pi-cues 的关键设计决策及取舍。每个 ADR 记录上下文、决策、�
 | [0009](0009-project-config-under-extensions.md) | 项目配置迁移至 .pi/extensions/pi-cues/ |
 | [0010](0010-walkup-explicit-trust-gate.md) | walkup 采集按显式信任决定门控 |
 | [0011](0011-walkup-exclude.md) | walkup 按锚点相对路径的 exclude 过滤 |
+| [0012](0012-injection-envelope.md) | 注入信封：`<pi-cues>` 唯一边界 |

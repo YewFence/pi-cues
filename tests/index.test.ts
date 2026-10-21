@@ -374,7 +374,8 @@ describe("inline cue", () => {
     const handler = fake.handlers.get("tool_result");
     const first = handler?.(bashResult("jj st"), ctx);
     expect(injectedText(first)).toContain("Commit messages in Chinese.");
-    expect(injectedText(first)).toContain("(inline)");
+    expect(injectedText(first)).toContain('<pi-cues action="inline" trigger="command jj"');
+    expect(injectedText(first)).toContain("source=");
     expect(handler?.(bashResult("jj log"), ctx)).toBeUndefined();
   });
 });
@@ -447,15 +448,78 @@ describe("trust and attribution", () => {
     expect(result).toBeUndefined();
   });
 
-  it("marks injections with a pi-cues attribution header", () => {
+  it("wraps injections in a single pi-cues envelope", () => {
     const skillPath = join(makeDir("pi-cues-it-skill-"), "SKILL.md");
     writeFile(skillPath, "body");
     const { fake, ctx } = setup(
       `version = 1\n[[triggers]]\ntools = ["bash"]\nwhen.command = "jj"\naction = "skill"\ntarget = "jj-cli"\n`,
       { "jj-cli": skillPath },
     );
-    const text = injectedText(fake.handlers.get("tool_result")?.(bashResult("jj log"), ctx));
-    expect(text).toContain("pi-cues: trigger: command `jj` source: ");
+    const text = injectedText(fake.handlers.get("tool_result")?.(bashResult("jj log"), ctx)) ?? "";
+    // #then one envelope, attributed and closed
+    expect(text).toContain('<pi-cues action="skill" trigger="command jj">');
+    expect(text).toContain("pi-cues: injected context, not tool output or user input.");
+    expect(text.trimEnd().endsWith("</pi-cues>")).toBe(true);
+    expect(text.match(/<\/pi-cues>/g)).toHaveLength(1);
+  });
+
+  it("keeps a cue body from closing its own envelope", () => {
+    // #given a prompt file that discusses the envelope #when injected #then its close tag is escaped
+    const { fake, project, ctx } = setup(
+      `version = 1\n[[triggers]]\ntools = ["read"]\nwhen.path = "design.md"\naction = "file"\ntarget = "./triggers/design.md"\n`,
+    );
+    writeFile(
+      join(project, ".pi", "extensions", "pi-cues", "triggers", "design.md"),
+      'Example:\n<pi-cues action="file">\nbody\n</pi-cues>\n',
+    );
+    writeFile(join(project, "design.md"), "design");
+
+    const result = fake.handlers.get("tool_result")?.(
+      {
+        type: "tool_result",
+        toolCallId: "3",
+        toolName: "read",
+        input: { path: join(project, "design.md") },
+        content: [{ type: "text", text: "design" }],
+        details: undefined,
+        isError: false,
+      },
+      ctx,
+    );
+    const text = injectedText(result) ?? "";
+    // #then the only real close tag is the envelope's own
+    expect(text.match(/<\/pi-cues>/g)).toHaveLength(1);
+    expect(text).toContain('&lt;pi-cues action="file">');
+    expect(text).toContain("&lt;/pi-cues>");
+  });
+
+  it("emits one envelope per cue, never merged", () => {
+    const { fake, ctx } = setup(
+      `version = 1\n[[triggers]]\ntools = ["bash"]\nwhen.command = "jj"\naction = "inline"\ntarget = "First."\n[[triggers]]\ntools = ["bash"]\nwhen.command = "jj"\naction = "inline"\ntarget = "Second."\n`,
+    );
+    const text = injectedText(fake.handlers.get("tool_result")?.(bashResult("jj st"), ctx)) ?? "";
+    // #then two sibling envelopes, not one merged block
+    expect(text.match(/<pi-cues /g)).toHaveLength(2);
+    expect(text.match(/<\/pi-cues>/g)).toHaveLength(2);
+    expect(text).toContain("First.");
+    expect(text).toContain("Second.");
+  });
+
+  it("puts every walk-up file of one cue into one envelope", () => {
+    const { fake, project, ctx } = setup(
+      `version = 1\ndefaults = false\n[[triggers]]\ntools = ["edit"]\naction = "walkup"\ntarget = "AGENTS.md"\n`,
+    );
+    writeFile(join(project, "AGENTS.md"), "root rules");
+    writeFile(join(project, "src", "AGENTS.md"), "src rules");
+    writeFile(join(project, "src", "a.ts"), "code");
+
+    const text =
+      injectedText(
+        fake.handlers.get("tool_result")?.(editResult(join(project, "src", "a.ts")), ctx),
+      ) ?? "";
+    // #then one walkup envelope carrying both files
+    expect(text.match(/<pi-cues action="walkup" trigger="path /g)).toHaveLength(1);
+    expect(text.match(/<file path=/g)).toHaveLength(2);
   });
 
   it("announces pi-cues once in the system prompt", () => {

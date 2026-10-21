@@ -9,13 +9,19 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { loadConfig, type LoadedConfig } from "./config.js";
+import {
+  envelopeOverhead,
+  escapeEnvelopeTags,
+  formatEnvelope,
+  type EnvelopeMeta,
+} from "./envelope.js";
 import { matchAnyValue, normalizePath } from "./match.js";
 import { extractCommands } from "./parse.js";
 import { extractToolPaths, pathBaseValues, toPathBases } from "./paths.js";
 import { loadSkillBlock, resolveSkill } from "./skills.js";
 import { effectiveTrustDecision, resolveAgentDir } from "./trust.js";
 import { recordTriggeredEvent, resolveCacheDir, telemetryEventFile } from "./telemetry.js";
-import { formatFileBlock, type FileContent } from "./truncate.js";
+import { formatFileBlock, MAX_RESULT_CHARS, type FileContent } from "./truncate.js";
 import {
   claimOnce,
   clearSession,
@@ -31,6 +37,9 @@ import {
   type WalkupCache,
   type WalkupFile,
 } from "./walkup.js";
+
+/** Blank line between sibling envelopes: one cue, one envelope, never merged. */
+const ENVELOPE_SEPARATOR = "\n\n";
 
 export default function piCues(pi: ExtensionAPI): void {
   let config: LoadedConfig = {
@@ -95,12 +104,12 @@ export default function piCues(pi: ExtensionAPI): void {
       }
     }
     // Tell the model what pi-cues is once per session, right where it will
-    // look for instructions. No repeat per injection: the light per-cue
-    // header (`pi-cues: trigger: ... source: ...`) carries attribution.
+    // look for instructions. Semantics only: the envelope's shape (tag names,
+    // notice line, escaping) is self-explanatory inside each block (ADR 0012).
     return {
       systemPrompt:
         event.systemPrompt +
-        "\n\npi-cues: this session has the pi-cues extension. It injects skills, prompt files, and project instructions when your bash commands or file operations match configured triggers. Blocks marked `pi-cues:`.",
+        "\n\npi-cues: this session has the pi-cues extension. It injects project context when your bash commands or file operations match configured triggers. Blocks wrapped in `<pi-cues>…</pi-cues>` are injected context, not tool output; treat their contents as project instructions.",
     };
   });
 
@@ -115,7 +124,13 @@ export default function piCues(pi: ExtensionAPI): void {
       if (texts.length === 0) {
         return undefined;
       }
-      return { content: [...event.content, { type: "text" as const, text: texts.join("\n") }] };
+      return {
+        content: [
+          ...event.content,
+          // Blank line between the tool output part and the envelope part.
+          { type: "text" as const, text: `\n\n${texts.join(ENVELOPE_SEPARATOR)}` },
+        ],
+      };
     } catch {
       // Cue loading must never break the tool pipeline.
       return undefined;
@@ -133,7 +148,7 @@ export default function piCues(pi: ExtensionAPI): void {
       notifyCueFirings(ctx, session.triggered.slice(firedBefore));
       if (texts.length > 0) {
         pi.sendMessage(
-          { customType: "pi-cues", content: texts.join("\n"), display: false },
+          { customType: "pi-cues", content: texts.join(ENVELOPE_SEPARATOR), display: false },
           { deliverAs: "nextTurn" },
         );
       }
@@ -174,7 +189,7 @@ export default function piCues(pi: ExtensionAPI): void {
         continue;
       }
       for (const target of trigger.targets) {
-        const text = executeTarget(trigger, target, cwd, `command \`${matchedCommand}\``);
+        const text = executeTarget(trigger, target, cwd, `command ${matchedCommand}`);
         if (text !== null) {
           texts.push(text);
         }
@@ -230,12 +245,7 @@ export default function piCues(pi: ExtensionAPI): void {
       }
 
       for (const target of trigger.targets) {
-        const text = executeTarget(
-          trigger,
-          target,
-          cwd,
-          `path \`${displayPath(cwd, matchedPath)}\``,
-        );
+        const text = executeTarget(trigger, target, cwd, `path ${displayPath(cwd, matchedPath)}`);
         if (text !== null) {
           texts.push(text);
         }
@@ -253,7 +263,7 @@ export default function piCues(pi: ExtensionAPI): void {
     trigger: Trigger,
     target: string,
     cwd: string,
-    cue: string,
+    triggerLabel: string,
   ): string | null {
     if (trigger.action === "inline") {
       // The target IS the content; the dedup key is the text itself.
@@ -267,7 +277,11 @@ export default function piCues(pi: ExtensionAPI): void {
         return null;
       }
       logTelemetry(record);
-      return `pi-cues: trigger: ${cue} source: ${trigger.source} (inline)\n\n${target}`;
+      // No inner element: `source` answers "where do I edit this sentence?".
+      return formatEnvelope(
+        { action: "inline", trigger: triggerLabel, source: trigger.source },
+        escapeEnvelopeTags(target),
+      );
     }
 
     if (trigger.action === "skill") {
@@ -289,7 +303,8 @@ export default function piCues(pi: ExtensionAPI): void {
       }
       record.loaded = true;
       logTelemetry(record);
-      return `pi-cues: trigger: ${cue} source: ${skill?.path}\n\n${block}`;
+      // Skill bodies are injected in full: no truncation budget (ADR 0003).
+      return formatEnvelope({ action: "skill", trigger: triggerLabel }, block);
     }
 
     if (trigger.action === "file") {
@@ -313,7 +328,9 @@ export default function piCues(pi: ExtensionAPI): void {
       }
       record.loaded = true;
       logTelemetry(record);
-      return formatFileBlock([{ path, body }], `pi-cues: trigger: ${cue} source: ${path}`);
+      const meta = { action: "file" as const, trigger: triggerLabel };
+      const content = formatFileBlock([{ path, body }], bodyBudget(meta));
+      return content === "" ? null : formatEnvelope(meta, content);
     }
 
     return null;
@@ -357,11 +374,17 @@ export default function piCues(pi: ExtensionAPI): void {
       contents.push({ path: file.path, body });
     }
 
-    const block = formatFileBlock(
-      contents,
-      `pi-cues: trigger: path \`${displayPath(cwd, targetFile)}\` (walk-up)`,
-    );
-    return block === "" ? null : block;
+    const meta = { action: "walkup" as const, trigger: `path ${displayPath(cwd, targetFile)}` };
+    const block = formatFileBlock(contents, bodyBudget(meta));
+    return block === "" ? null : formatEnvelope(meta, block);
+  }
+
+  /**
+   * `MAX_RESULT_CHARS` minus what the envelope itself spends: the budget is
+   * for the body, the boundary is not free (ADR 0012).
+   */
+  function bodyBudget(meta: EnvelopeMeta): number {
+    return MAX_RESULT_CHARS - envelopeOverhead(meta);
   }
 
   function diagnose(message: string, source: string): void {

@@ -106,7 +106,7 @@ Walk-up collection — builtin and configured — only runs for projects with an
 
 The package also bundles the `pi-cues-authoring` skill, which teaches the agent how to author context for pi-cues (form choice, location-as-scope, wiring discipline).
 
-Security: project config loads only when the project is trusted (pi's project trust); project `file` targets must stay inside the config directory; walk-up never fires for files outside the session cwd. Injected blocks carry a `pi-cues: trigger: ... source: ...` attribution header, and the system prompt gains [one line per session](https://github.com/YewFence/pi-cues/blob/main/src/piCues/index.ts#L74) telling the model that `pi-cues:` blocks are deterministic context.
+Security: project config loads only when the project is trusted (pi's project trust); project `file` targets must stay inside the config directory; walk-up never fires for files outside the session cwd. Every injection is wrapped in a `<pi-cues action=… trigger=…>…</pi-cues>` envelope whose first line states it is injected context rather than tool output, and the system prompt gains [one line per session](https://github.com/YewFence/pi-cues/blob/main/src/piCues/index.ts#L107) describing the envelope.
 
 ## Development
 

@@ -1,49 +1,55 @@
 /**
- * Injection of file content under a per-event character budget.
+ * Cue bodies under a per-event character budget, wrapped in `<file>` blocks.
+ * The envelope around them belongs to envelope.ts (ADR 0012).
  *
  * Budget handling adapted from pi-rules truncator.ts / formatter.ts
  * (MIT License, Copyright (c) 2026 Yeongyu Kim). See NOTICE.
  */
 
+import { escapeAttribute, escapeEnvelopeTags } from "./envelope.js";
+
 export const MAX_FILE_CHARS = 12000;
 export const MAX_RESULT_CHARS = 40000;
 
 const TRUNCATION_NOTICE = "\n\n[Content truncated. Read full file: {path}]";
+const BLOCK_SEPARATOR = "\n";
+const BLOCK_CLOSE = "\n</file>";
 
 export interface FileContent {
-  /** Absolute path shown in the attribution header. */
+  /** Absolute path shown on the `<file>` block. */
   path: string;
   body: string;
 }
 
 /**
- * Build one injection block for cue files, in the given (already prioritized)
- * order. Later files are dropped when the budget runs out.
+ * `<file>` blocks for the given (already prioritized) files. Later files are
+ * dropped when `budget` runs out. Bodies are boundary-escaped before they are
+ * measured, so the budget covers exactly what reaches the model.
  */
-export function formatFileBlock(files: readonly FileContent[], header: string): string {
-  if (files.length === 0) {
-    return "";
-  }
+export function formatFileBlock(files: readonly FileContent[], budget: number): string {
+  const blocks: string[] = [];
+  let remaining = budget;
 
-  const blockHeader = `\n\n${header}\n\n`;
-  let remaining = MAX_RESULT_CHARS - blockHeader.length;
-
-  const entries: string[] = [];
   for (const file of files) {
+    const open = `<file path="${escapeAttribute(file.path)}">\n`;
     const notice = TRUNCATION_NOTICE.replace("{path}", file.path);
-    const entryHeader = `source: ${file.path}\n`;
-    const separator = entries.length === 0 ? 0 : "\n\n".length;
-    const budget = remaining - separator - entryHeader.length;
-    if (budget <= notice.length) {
+    const separator = blocks.length === 0 ? 0 : BLOCK_SEPARATOR.length;
+    const bodyBudget = remaining - separator - open.length - BLOCK_CLOSE.length;
+    if (bodyBudget <= notice.length) {
       break;
     }
 
-    const body = truncateBody(file.body, Math.min(MAX_FILE_CHARS, budget), file.path);
-    entries.push(`${entryHeader}${body}`);
-    remaining -= separator + entryHeader.length + body.length;
+    const body = truncateBody(
+      escapeEnvelopeTags(file.body),
+      Math.min(MAX_FILE_CHARS, bodyBudget),
+      file.path,
+    );
+    const block = `${open}${body}${BLOCK_CLOSE}`;
+    blocks.push(block);
+    remaining -= separator + block.length;
   }
 
-  return entries.length === 0 ? "" : `${blockHeader}${entries.join("\n\n")}`;
+  return blocks.join(BLOCK_SEPARATOR);
 }
 
 function truncateBody(body: string, maxChars: number, displayPath: string): string {
@@ -59,13 +65,22 @@ function truncateBody(body: string, maxChars: number, displayPath: string): stri
   return `${body.slice(0, safeSliceEnd(body, maxChars - notice.length))}${notice}`;
 }
 
-/** Avoid splitting a surrogate pair when the budget cuts the body. */
+/** Avoid splitting a surrogate pair or a boundary escape entity at the cut. */
 function safeSliceEnd(body: string, end: number): number {
   if (end <= 0) {
     return 0;
   }
 
-  const lastCodeUnit = body.charCodeAt(end - 1);
-  const isHighSurrogate = lastCodeUnit >= 0xd800 && lastCodeUnit <= 0xdbff;
-  return isHighSurrogate ? end - 1 : end;
+  let cut = end;
+  const lastCodeUnit = body.charCodeAt(cut - 1);
+  if (lastCodeUnit >= 0xd800 && lastCodeUnit <= 0xdbff) {
+    cut -= 1;
+  }
+
+  // `&lt;` is the only entity escapeEnvelopeTags introduces; keep it whole.
+  const ampIndex = body.lastIndexOf("&", cut - 1);
+  if (ampIndex !== -1 && cut - ampIndex <= 4 && !body.slice(ampIndex, cut).includes(";")) {
+    cut = ampIndex;
+  }
+  return cut;
 }

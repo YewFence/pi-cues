@@ -11,6 +11,8 @@ import { dirname } from "node:path";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
+import { escapeAttribute, escapeEnvelopeTags } from "./envelope.js";
+
 const SKILL_COMMAND_PREFIX = "skill:";
 
 export interface SkillRef {
@@ -38,7 +40,9 @@ export function loadSkillBlock(skill: SkillRef): string | null {
     return null;
   }
 
-  const body = stripFrontmatter(content).trim();
+  // The skill body is cue content: escape the envelope's own tag names so it
+  // cannot close the surrounding `<pi-cues>` block early (ADR 0012).
+  const body = escapeEnvelopeTags(stripFrontmatter(content).trim());
   const baseDir = dirname(skill.path);
   return `<skill name="${escapeAttribute(skill.name)}" location="${escapeAttribute(skill.path)}">\nReferences are relative to ${baseDir}.\n\n${body}\n</skill>`;
 }
@@ -61,12 +65,4 @@ export function stripFrontmatter(content: string): string {
     return content.slice(afterMarker + 1);
   }
   return content.slice(afterMarker);
-}
-
-function escapeAttribute(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
 }
