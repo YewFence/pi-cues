@@ -1,6 +1,6 @@
 ---
 name: pi-cues-authoring
-description: Author context that pi-cues loads — AGENTS.md files, prompt files, inline cues, and the triggers that wire them. Use when writing or editing AGENTS.md or other repository context files, editing pi-cues.toml, adding project conventions, or auditing context wiring.
+description: Author context that pi-cues loads — AGENTS.md files, prompt files, inline cues, and the triggers that wire them. Use when writing or editing AGENTS.md or other repository context files, editing a pi-cues `config.toml`, adding project conventions, or auditing context wiring.
 ---
 
 # pi-cues authoring
@@ -26,10 +26,10 @@ Length and judgment pick the form — decide before writing:
 
 1. Pick the form per "Choose the form first". Done when: you can say why the lighter form was insufficient.
 2. Place it at the deepest directory whose scope it serves. Done when: the path itself states the scope.
-3. Wire the trigger in `pi-cues.toml` (skip for `AGENTS.md` — the builtin walkup has it). Done when: the `when` predicate matches the real firing situation, nothing broader.
+3. Wire the trigger in the project config (`.pi/extensions/pi-cues/config.toml`) or the global one (`~/.pi/agent/extensions/pi-cues/config.toml`) — skip for `AGENTS.md`, the builtin walkup has it. Done when: the `when` predicate matches the real firing situation, nothing broader.
 4. Verify with `/cues status` or by firing the trigger once. Done when: the status shows a ✓ record for your target.
 
 ## Maintaining
 
 - When you edit a context file, check the triggers referencing it in the same pass — globs and paths drift silently.
-- Occasionally audit both directions: every `file` target in `pi-cues.toml` still exists, and every context `.md` in the repo has an owner (a trigger, the builtin walkup, or pi itself).
+- Occasionally audit both directions: every `file` target in the pi-cues config still exists, and every context `.md` in the repo has an owner (a trigger, the builtin walkup, or pi itself).

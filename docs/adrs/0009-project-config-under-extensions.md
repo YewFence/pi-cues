@@ -1,6 +1,6 @@
 # ADR 0009: 项目配置迁移至 .pi/extensions/pi-cues/config.toml
 
-- 状态：已接受
+- 状态：已接受（决策 2「全局级保持 `~/.pi/agent/pi-cues.toml`」已被 [ADR 0014](0014-global-config-under-extensions.md) 取代；决策 1、3 仍然有效）
 - 日期：2026-10-14
 
 ## 上下文

@@ -49,7 +49,7 @@ version = 1
 
 The schema is generated from the `RawConfig` types in `src/piCues/types.ts`; `tests/schema.test.ts` fails when the two drift apart.
 
-Create `.pi/extensions/pi-cues/config.toml` in your project (or `~/.pi/agent/pi-cues.toml` globally; the two are appended, global baseline first). The project file lives under `.pi/extensions/` on purpose: that directory is one of pi's trust-requiring resources, so pi asks for project trust before a cloned repository can ship any pi-cues config, and an untrusted project's config is withheld:
+Create `.pi/extensions/pi-cues/config.toml` in your project, or `~/.pi/agent/extensions/pi-cues/config.toml` globally — same relative path, different root; the two are appended, global baseline first. The location under `extensions/` is deliberate: in a project, that directory is one of pi's trust-requiring resources, so pi asks for project trust before a cloned repository can ship any pi-cues config, and an untrusted project's config is withheld:
 
 ```toml
 version = 1

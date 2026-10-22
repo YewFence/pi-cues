@@ -49,11 +49,11 @@ target = ["AGENTS.md"]
 describe("loadConfig", () => {
   it("loads and merges global then project config", () => {
     // #given valid config at both levels #when loading #then triggers append, global first
-    const home = makeTree({ ".pi/agent/pi-cues.toml": VALID });
+    const home = makeTree({ ".pi/agent/extensions/pi-cues/config.toml": VALID });
     const project = makeTree({ ".pi/extensions/pi-cues/config.toml": VALID });
     const config = loadConfig({ cwd: project, agentDir: join(home, ".pi", "agent") });
     expect(config.files).toEqual([
-      join(home, ".pi/agent/pi-cues.toml"),
+      join(home, ".pi/agent/extensions/pi-cues/config.toml"),
       join(project, ".pi/extensions/pi-cues/config.toml"),
     ]);
     expect(config.triggers).toHaveLength(5); // 2 global + 2 project + builtin default
@@ -64,6 +64,13 @@ describe("loadConfig", () => {
   it("ignores the legacy .pi/pi-cues.toml location", () => {
     const project = makeTree({ ".pi/pi-cues.toml": VALID });
     const config = loadConfig({ cwd: project, agentDir: makeAgent() });
+    expect(config.files).toEqual([]);
+    expect(config.diagnostics).toEqual([]);
+  });
+
+  it("ignores the legacy global pi-cues.toml location", () => {
+    const home = makeTree({ ".pi/agent/pi-cues.toml": VALID });
+    const config = loadConfig({ cwd: makeTree({}), agentDir: join(home, ".pi", "agent") });
     expect(config.files).toEqual([]);
     expect(config.diagnostics).toEqual([]);
   });
@@ -80,7 +87,9 @@ describe("loadConfig", () => {
   });
 
   it("disables builtin defaults with `defaults = false` in either level", () => {
-    const home = makeTree({ ".pi/agent/pi-cues.toml": "version = 1\ndefaults = false\n" });
+    const home = makeTree({
+      ".pi/agent/extensions/pi-cues/config.toml": "version = 1\ndefaults = false\n",
+    });
     const project = makeTree({ ".pi/extensions/pi-cues/config.toml": VALID });
     const config = loadConfig({ cwd: project, agentDir: join(home, ".pi", "agent") });
     expect(config.triggers).toHaveLength(2);
@@ -101,7 +110,7 @@ describe("loadConfig", () => {
   });
 
   it("diagnoses invalid TOML and continues with other files", () => {
-    const home = makeTree({ ".pi/agent/pi-cues.toml": "not [valid" });
+    const home = makeTree({ ".pi/agent/extensions/pi-cues/config.toml": "not [valid" });
     const project = makeTree({ ".pi/extensions/pi-cues/config.toml": VALID });
     const config = loadConfig({ cwd: project, agentDir: join(home, ".pi", "agent") });
     expect(config.diagnostics).toHaveLength(1);
@@ -202,7 +211,7 @@ exclude = "x.md"
 
   it("allows absolute file targets in global config", () => {
     const home = makeTree({
-      ".pi/agent/pi-cues.toml": `version = 1\n[[triggers]]\ntools = ["bash"]\nwhen.command = "jj"\naction = "file"\ntarget = "/shared/jj.md"\n`,
+      ".pi/agent/extensions/pi-cues/config.toml": `version = 1\n[[triggers]]\ntools = ["bash"]\nwhen.command = "jj"\naction = "file"\ntarget = "/shared/jj.md"\n`,
     });
     const config = loadConfig({ cwd: makeTree({}), agentDir: join(home, ".pi", "agent") });
     expect(config.triggers.some((t) => t.targets[0] === "/shared/jj.md")).toBe(true);
@@ -226,7 +235,7 @@ exclude = "x.md"
 
 describe("telemetry setting", () => {
   it("defaults to enabled", () => {
-    const home = makeTree({ ".pi/agent/pi-cues.toml": VALID });
+    const home = makeTree({ ".pi/agent/extensions/pi-cues/config.toml": VALID });
     const config = loadConfig({ cwd: makeTree({}), agentDir: join(home, ".pi", "agent") });
     expect(config.telemetry).toBe(true);
     expect(config.diagnostics).toEqual([]);
@@ -234,7 +243,7 @@ describe("telemetry setting", () => {
 
   it("turns off via [telemetry] enabled = false in the global config", () => {
     const home = makeTree({
-      ".pi/agent/pi-cues.toml": "version = 1\n[telemetry]\nenabled = false\n",
+      ".pi/agent/extensions/pi-cues/config.toml": "version = 1\n[telemetry]\nenabled = false\n",
     });
     const config = loadConfig({ cwd: makeTree({}), agentDir: join(home, ".pi", "agent") });
     expect(config.telemetry).toBe(false);
@@ -253,12 +262,14 @@ describe("telemetry setting", () => {
   });
 
   it("diagnoses malformed telemetry entries and stays enabled", () => {
-    const home = makeTree({ ".pi/agent/pi-cues.toml": 'version = 1\ntelemetry = "off"\n' });
+    const home = makeTree({
+      ".pi/agent/extensions/pi-cues/config.toml": 'version = 1\ntelemetry = "off"\n',
+    });
     const enabledString = makeTree({
-      ".pi/agent/pi-cues.toml": 'version = 1\n[telemetry]\nenabled = "no"\n',
+      ".pi/agent/extensions/pi-cues/config.toml": 'version = 1\n[telemetry]\nenabled = "no"\n',
     });
     const unknownKey = makeTree({
-      ".pi/agent/pi-cues.toml": "version = 1\n[telemetry]\nremote = true\n",
+      ".pi/agent/extensions/pi-cues/config.toml": "version = 1\n[telemetry]\nremote = true\n",
     });
     for (const tree of [home, enabledString, unknownKey]) {
       const config = loadConfig({ cwd: makeTree({}), agentDir: join(tree, ".pi", "agent") });

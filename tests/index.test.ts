@@ -628,7 +628,7 @@ describe("telemetry", () => {
       `version = 1\n[[triggers]]\ntools = ["bash"]\nwhen.command = "jj"\naction = "inline"\ntarget = "note"\n`,
     );
     writeFile(
-      join(home, ".pi", "agent", "pi-cues.toml"),
+      join(home, ".pi", "agent", "extensions", "pi-cues", "config.toml"),
       "version = 1\n[telemetry]\nenabled = false\n",
     );
     fake.handlers.get("session_start")?.({ type: "session_start" }, ctx);

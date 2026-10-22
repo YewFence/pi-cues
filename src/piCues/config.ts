@@ -1,7 +1,8 @@
 /**
  * Config discovery, parsing and validation.
  *
- * Two levels: global `~/.pi/agent/pi-cues.toml` (the user's own, unrestricted)
+ * Two levels, same relative path under each root: global
+ * `~/.pi/agent/extensions/pi-cues/config.toml` (the user's own, unrestricted)
  * and project `<cwd>/.pi/extensions/pi-cues/config.toml` (its parent directory
  * is a pi trust-requiring resource, so pi asks for trust before the project
  * can ship any pi-cues config). Triggers of the two levels are appended
@@ -20,6 +21,9 @@ const PATH_TOOL_NAMES: ReadonlySet<string> = new Set(["read", "edit", "write"]);
 const ACTION_NAMES: ReadonlySet<string> = new Set(["skill", "file", "walkup", "inline", "exec"]);
 const WHEN_KEYS: ReadonlySet<string> = new Set(["command", "path"]);
 const CONFIG_VERSION = 1;
+
+/** Config path relative to a root (project `.pi/` or pi's global agent dir). */
+const CONFIG_SUBPATH: ReadonlyArray<string> = ["extensions", "pi-cues", "config.toml"];
 
 export interface LoadedConfig {
   triggers: Trigger[];
@@ -110,10 +114,7 @@ function loadLevel(
     file: undefined,
     telemetry: undefined,
   };
-  const file =
-    scope === "project"
-      ? join(baseDir, "extensions", "pi-cues", "config.toml")
-      : join(baseDir, "pi-cues.toml");
+  const file = join(baseDir, ...CONFIG_SUBPATH);
   if (!existsSync(file)) {
     return empty;
   }

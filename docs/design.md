@@ -147,16 +147,18 @@ Usage: jj edit [REVSET]
 
 ## 配置文件
 
-路径规范与其他扩展一致，项目级和全局级：
+路径规范与其他扩展一致，两级用**同一个相对路径**，只有根不同：
 
-- 项目：`./.pi/pi-cues.toml`（优先）**或** `./.pi/extensions/pi-cues/config.toml`——同级同时存在时只用 `pi-cues.toml`，另一个记 diagnostic；pi 的惯例是 `.pi/` 下每种资源一个扁平条目（`.pi/settings.json`、`.pi/mcp.json`），`pi-cues.toml` 因此是首选
-- 全局：`~/.pi/agent/` 下同路径（agent 目录，非 `~/.pi/`）
+- 项目：`<cwd>/.pi/extensions/pi-cues/config.toml`
+- 全局：`~/.pi/agent/extensions/pi-cues/config.toml`（pi 的全局 agent 目录，非 `~/.pi/`）
+
+相对路径统一为 `extensions/pi-cues/config.toml` 是有意的：两级的 schema、trigger 语义、`file` target 相对基准完全一致，两级的**差异只在加载条件**（全局总是加载、项目按信任加载），不再用路径形状重复编码（ADR 0009 定项目位置，ADR 0014 把全局对齐过来）。旧位置 `.pi/pi-cues.toml` 与 `~/.pi/agent/pi-cues.toml` 均静默忽略。
 
 合并语义：**全局提供基线、项目级追加合并**。trigger 是匿名列表、没有可做覆盖键的标识，追加是唯一不引入额外概念的语义；会话去重天然吸收重复项。
 
 **信任与边界**（对齐 pi 的 project trust 模型）：
 
-- **项目配置仅在 `ctx.isProjectTrusted()` 时加载**。全局安装扩展 + 恶意仓库的场景下，仓库自带的 `.pi/pi-cues.toml` 会被整体忽略（含其中的 `defaults` 覆盖），记 diagnostic 并在 session_start notify。全局配置是用户自己的，始终加载
+- **项目配置仅在 `ctx.isProjectTrusted()` 时加载**。全局安装扩展 + 恶意仓库的场景下，仓库自带的 `.pi/extensions/pi-cues/config.toml` 会被整体忽略（含其中的 `defaults` 覆盖），记 diagnostic 并在 session_start notify。全局配置是用户自己的，始终加载
 - **项目配置的 `file` target 禁止逃逸配置目录**：解析后路径不以配置目录为前缀（含绝对路径指外）的条目记 diagnostic 拒载；全局配置不受此限
 - **walkup 对 cwd 子树外的被操作文件完全不触发**（早期版本还会回退检查 cwd 本身，已移除——无关路径不该拉来无关上下文）
 
@@ -328,7 +330,7 @@ pi-cues/
 
 - `parse.test.ts`：引用/转义、`&&`/`;`/管道、环境赋值前缀、包装器、basename、解析失败静默
 - `paths.test.ts`：read/edit/write 各输入字段、相对路径 resolve、多 base 生成
-- `config.test.ts`：项目/全局追加合并、同级双路径 `pi-cues.toml` 优先、缺失容忍、`tools`/`when` 键不匹配等校验 diagnostics、target 相对配置目录解析
+- `config.test.ts`：项目/全局追加合并、两级同路径布局、旧位置（`.pi/pi-cues.toml`、`~/.pi/agent/pi-cues.toml`）静默忽略、缺失容忍、`tools`/`when` 键不匹配等校验 diagnostics、target 相对配置目录解析
 - `match.test.ts`：命令精确匹配、路径 glob 三 base、负向排除
 - `triggers.test.ts`：会话内去重、多 trigger 同目标只加载一次、compaction 重置
 - `load.test.ts`（即 inject/skills）：`file` 动作读取 + 截断预算；`skill` 动作全文注入不截断、getCommands 发现的 `skill:` 前缀剥离与缺名处理；`walkup` 动作多层目录收集、近→远顺序、与 `contextFiles` 去重

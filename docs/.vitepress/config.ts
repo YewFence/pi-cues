@@ -36,7 +36,8 @@ export default defineConfig({
           { text: '0010 Walkup explicit trust gate', link: '/adrs/0010-walkup-explicit-trust-gate' },
           { text: '0011 Walkup exclude', link: '/adrs/0011-walkup-exclude' },
           { text: '0012 Injection envelope', link: '/adrs/0012-injection-envelope' },
-          { text: '0013 exec action', link: '/adrs/0013-exec-action' }
+          { text: '0013 exec action', link: '/adrs/0013-exec-action' },
+          { text: '0014 Global config under extensions', link: '/adrs/0014-global-config-under-extensions' }
         ]
       }
     ],
