@@ -1,3 +1,9 @@
+## What's Changed in 0.2.0
+
+- inject exec output as a <command-output> block by @YewFence
+- emit oxfmt-clean Markdown from the changelog template by @YewFence
+
+**Full Changelog**: https://github.com/YewFence/pi-cues/compare/v0.1.0...v0.2.0
 ## What's Changed in 0.1.0
 
 - tolerate an unchanged release version by @YewFence
