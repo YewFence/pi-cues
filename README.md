@@ -139,6 +139,12 @@ If you have suggestions or find a bug, please [open an issue](https://github.com
 
 Pull requests are welcome. See the [Contributing Guide](CONTRIBUTING.md).
 
+## Why pi-cues
+
+I kept running into the same failure, and it was never a model being stupid — it was me expecting natural-language instructions to behave like guarantees. Tell a model to run `jj --help` before using `jj`, and it usually will; ask it to load the `jj-cli` skill it can see listed, and it often won't; drop an `AGENTS.md` into a subdirectory, and whether it gets read depends on how the session feels that day. Every one of those instructions is a request, and a request is a coin flip I get to lose at the worst possible moment — usually right after I've stopped paying attention. The fix is not a better request.
+
+Firefox's [`review-context.toml`](https://github.com/mozilla-firefox/firefox/blob/main/review-context.toml) pointed at the way out: bind context to a deterministic predicate — a file path, a command — instead of to the model's goodwill. So this is that idea, moved onto the two signals a pi session already produces: the bash commands the agent runs and the paths it touches. `jj log` fires the jj skill, an edit to `**/*.test.ts` fires the Vitest conventions, the `AGENTS.md` above the file gets collected on the way in. Write the trigger once and it fires every single time, because nothing about it depends on the model remembering anything: the rule either matches or it does not, and a match always injects. That is the whole point — context you configured stops being context you hope for.
+
 ## Acknowledgments
 
 pi-cues' design is inspired by Firefox's [review-context.toml](https://github.com/mozilla-firefox/firefox/blob/main/review-context.toml), which loads review context through deterministic predicates (see [bugbug's design doc](https://github.com/mozilla/bugbug/blob/master/docs/code-review-skills.md)). The implementation references [pi-rules](https://github.com/code-yeongyu/pi-rules) (MIT, © Yeongyu Kim): the glob matcher, truncation budget, walk-up traversal, session dedup pattern, and the `tool_result` injection contract are adapted from its source. The skill `<skill>` block format and frontmatter stripping come from [pi-mention-skill](https://github.com/zigai/pi-tweaks) (MIT, © zigai). See [NOTICE](NOTICE) for details.
