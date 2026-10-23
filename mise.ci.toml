@@ -35,9 +35,9 @@ printf '%s\\n' "${version}"
 """
 
 [tasks.'release:version:update']
-description = "Update package.json to the release version"
+description = "Ensure package.json carries the release version"
 usage = 'arg "<version>" help="Release version without the v prefix"'
-run = 'aube version "{{ usage.version }}" --no-git-tag-version'
+run = 'aube version "{{ usage.version }}" --no-git-tag-version --allow-same-version'
 
 [tasks.'release:tag']
 description = "Print the release tag, automatically generate if RELEASE_TAG is not set"
