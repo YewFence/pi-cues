@@ -11,7 +11,7 @@ import type { ActionKind } from "./types.js";
 export const ENVELOPE_NOTICE = "pi-cues: injected context, not tool output or user input.";
 
 /** The envelope's own tag names; a `<` in front of them is escaped in bodies. */
-const ENVELOPE_TAGS = ["pi-cues", "file", "skill"] as const;
+const ENVELOPE_TAGS = ["pi-cues", "file", "skill", "command-output"] as const;
 
 const CLOSE_TAG = "</pi-cues>";
 
@@ -36,8 +36,8 @@ export function envelopeOverhead(meta: EnvelopeMeta): number {
 /**
  * Escape `<` in front of the envelope's own tag names, so the first
  * `</pi-cues>` inside the block is always the real close tag and a body cannot
- * close the inner `<file>` / `<skill>` early. Nothing else is touched: other
- * markdown stays byte-identical. Case-sensitive by design.
+ * close the inner `<file>` / `<skill>` / `<command-output>` early. Nothing else is
+ * touched: other markdown stays byte-identical. Case-sensitive by design.
  */
 export function escapeEnvelopeTags(text: string): string {
   let escaped = text;

@@ -117,10 +117,10 @@ Write commit messages in Chinese.
 <pi-cues action="exec" trigger="command jj">
 pi-cues: injected context, not tool output or user input.
 
-<file path="jj edit --help">
+<command-output command="jj edit --help">
 Usage: jj edit [REVSET]
 …
-</file>
+</command-output>
 </pi-cues>
 ```
 
@@ -129,7 +129,7 @@ Usage: jj edit [REVSET]
 1. **开标签带归因**：`action`（skill / file / walkup / inline / exec）+ `trigger`（`command {名}` 或 `path {被操作路径}`，后者 walkup 与 file 同形，靠 `action` 区分）。内容路径不进属性——skill 的路径在 `<skill location>` 上、file/walkup 的在 `<file path>` 上，每处只写一次；唯一例外是 `inline`：它没有内层元素，`source` 属性指向声明这句话的配置文件（回答「想改这句话该改哪」）。属性值按 XML 转义（`&` `"` `<` `>`）。
 2. **固定声明行**：信封内第一行恒为 `pi-cues: injected context, not tool output or user input.` 逐字固定、不随 action 变化——固定措辞才能在长上下文里被一眼认出；详细语义（可信的项目指令、非工具输出）由 system prompt 的一次性说明承担，不在每个块里重复。措辞要同时盖住两个投递通道：`tool_result` 里易被当成工具输出，`user_bash` 的 nextTurn 消息里易被当成用户输入。
 3. **闭标签独占一行**：`</pi-cues>` 单独成行，正文与它之间空行。
-4. **边界序列转义（唯一边界的关键）**：信封自己会用到的三个标签名——`pi-cues`、`file`、`skill`——在正文里出现时，它们前面的 `<` 一律转义成 `&lt;`（即 `<pi-cues` / `</pi-cues` / `<file` / `</file` / `<skill` / `</skill` 六种前缀，大小写敏感）。其它 markdown 原样保留。这样「第一个 `</pi-cues>` 一定是真闭标签」恒成立，内层的 `</file>` / `</skill>` 也不会被正文提前闭合——本仓库自己的 `design.md` 就是反例样本：它满篇 `<pi-cues>` 示例，被 `file` action 注入时会提前闭合信封。
+4. **边界序列转义（唯一边界的关键）**：信封自己会用到的四个标签名——`pi-cues`、`file`、`skill`、`command-output`——在正文里出现时，它们前面的 `<` 一律转义成 `&lt;`（即 `<pi-cues` / `</pi-cues` / `<file` / `</file` / `<skill` / `</skill` / `<command-output` / `</command-output` 八种前缀，大小写敏感）。其它 markdown 原样保留。这样「第一个 `</pi-cues>` 一定是真闭标签」恒成立，内层的 `</file>` / `</skill>` / `</command-output>` 也不会被正文提前闭合——本仓库自己的 `design.md` 就是反例样本：它满篇 `<pi-cues>` 示例，被 `file` action 注入时会提前闭合信封。
 5. **一条 cue 一个信封**：一次事件命中多条 cue 时产出多个并列信封（各自带自己的 `trigger`），不合并、不嵌套；它们拼进同一个追加 part，信封之间空行。去重仍是 per-target，与信封一一对应。
 6. **信封只出现在追加的尾部 part 里**：`tool_result` 通道把信封追加为 content 数组的最后一个 part，工具输出本身一个字节不改；信封内部再空行分隔声明行与正文。`user_bash` 通道不走 content 数组（ADR 0006）：信封作为 nextTurn 消息的**全部内容**发出，形状不变——一个形状才能被模型当成一个记号。
 7. **信封开销计入截断预算**：`MAX_RESULT_CHARS` 先扣信封与声明行，剩余额度再分给正文。
@@ -317,7 +317,7 @@ pi-cues/
 │   ├── match.ts        # picomatch 封装 + trigger 匹配
 │   ├── skills.ts       # skill 发现：pi.getCommands() 过滤 skill 命令，skill 名 → SKILL.md 路径
 │   ├── envelope.ts     # 注入信封：开标签属性 + 固定声明行 + 闭标签 + 边界序列转义
-│   ├── truncate.ts     # file/walkup 正文的截断预算与 <file> 拼接（只负责正文，不管信封）
+│   ├── truncate.ts     # file/walkup 正文的截断预算与 <file> 拼接、exec 输出的 <command-output> 拼接（只负责正文，不管信封）
 │   ├── walkup.ts       # walk-up 目录序列生成 + 会话态发现缓存
 │   └── triggers.ts     # 去重状态机
 ├── test/               # vitest，参考 pi-rules 的 temp-fs + 可注入 home dir 手法
@@ -334,7 +334,7 @@ pi-cues/
 - `match.test.ts`：命令精确匹配、路径 glob 三 base、负向排除
 - `triggers.test.ts`：会话内去重、多 trigger 同目标只加载一次、compaction 重置
 - `load.test.ts`（即 inject/skills）：`file` 动作读取 + 截断预算；`skill` 动作全文注入不截断、getCommands 发现的 `skill:` 前缀剥离与缺名处理；`walkup` 动作多层目录收集、近→远顺序、与 `contextFiles` 去重
-- `truncate.test.ts`：截断预算、单文件/多文件拼接、信封（开标签属性、固定声明行、闭标签独占行、正文里 `<pi-cues` / `</pi-cues` / `<file` / `</file` 前缀被转义）
+- `truncate.test.ts`：截断预算、单文件/多文件拼接、信封（开标签属性、固定声明行、闭标签独占行、正文里 `<pi-cues` / `</pi-cues` / `<file` / `</file` 等前缀被转义）；`<command-output>` 的命令属性与截断提示（重跑而非读文件）
 - `walkup.test.ts`：边界锚定 cwd、目标文件在子树外只查 cwd、会话态缓存命中与 stat 指纹失效（含 missing→exists 转变）、compaction 重置
 - `envelope.test.ts`：四个 action 的信封形状、一条 cue 一个信封（多 cue 不合并）、属性值转义、声明行逐字固定
 - `index.test.ts`（集成）：user_bash 命中后 pending 注入在下一次模型请求前发出、`!!` 前缀不触发、`/cues status` 输出 diagnostics 与去重清单、内置默认 walkup 开箱即用与 `defaults = false` 关闭、跨目录后期发现、默认与自定义 walkup 按文件去重

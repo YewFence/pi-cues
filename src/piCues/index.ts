@@ -25,7 +25,12 @@ import { extractToolPaths, pathBaseValues, toPathBases } from "./paths.js";
 import { loadSkillBlock, resolveSkill } from "./skills.js";
 import { effectiveTrustDecision, resolveAgentDir } from "./trust.js";
 import { recordTriggeredEvent, resolveCacheDir, telemetryEventFile } from "./telemetry.js";
-import { formatFileBlock, MAX_RESULT_CHARS, type FileContent } from "./truncate.js";
+import {
+  formatCommandOutputBlock,
+  formatFileBlock,
+  MAX_RESULT_CHARS,
+  type FileContent,
+} from "./truncate.js";
 import {
   claimOnce,
   clearSession,
@@ -317,7 +322,10 @@ export default function piCues(pi: ExtensionAPI): void {
       return null;
     }
     const meta = { action: "exec" as const, trigger: triggerLabel };
-    const content = formatFileBlock([{ path: record.target, body: output }], bodyBudget(meta));
+    const content = formatCommandOutputBlock(
+      { command: record.target, body: output },
+      bodyBudget(meta),
+    );
     return content === "" ? null : formatEnvelope(meta, content);
   }
 

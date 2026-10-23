@@ -739,7 +739,7 @@ describe("exec cue", () => {
     expect(fake.sent).toHaveLength(0);
     const content = injectedText(result) ?? "";
     expect(content).toContain('<pi-cues action="exec" trigger="command jj">');
-    expect(content).toContain('<file path="jj edit --help">');
+    expect(content).toContain('<command-output command="jj edit --help">');
     expect(content).toContain("Usage: jj edit [REVSET]");
   });
 

@@ -78,7 +78,9 @@ target = "Write commit messages in Chinese."
 # Running `jj ...` runs a command and injects its output — the classic case
 # is pulling the exact help text of the subcommand in play. when.command
 # matches subcommands too: "jj edit" only fires for `jj edit …`, while bare
-# "jj" still matches every jj invocation. The command runs inside the tool
+# "jj" still matches every jj invocation. The output lands in a
+# <command-output command="..."> block; when it is truncated, the model is
+# told to re-run the command. The command runs inside the tool
 # result, so keep it fast: it adds its own runtime to the bash call.
 [[triggers]]
 tools = ["bash"]

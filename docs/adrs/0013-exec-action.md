@@ -1,6 +1,6 @@
 # ADR 0013: exec 动作——运行配置命令并注入其输出
 
-- 状态：已接受
+- 状态：已接受（输出块形状已被 ADR 0015 取代）
 - 日期：2026-10-21
 
 ## 上下文
@@ -19,7 +19,7 @@
 - **target 是字面命令行**，经 pi 的 `createLocalBashOperations()` 在与 bash 工具相同的 shell、cwd 与环境中执行。**不做占位符插值**（没有 `{command}` 之类）：插值引入注入面且没有实际需求。
 - **仅 bash 触发器可用**，且必须带 `when.command`；path 事件对它没有意义。
 - **在 handler 内等待子进程**：命令跑完、信封组装好之后 handler 才返回，信封因此和 `jj log` 自己的输出出现在同一条工具结果里。代价是这次工具调用会变慢，耗时取 exec 命令与真实工具两者中较久的那个——所以 target 应当是 `--help` 这类亚秒级命令，不该指向跑很久的东西。
-- 输出经 `formatFileBlock` 截断（沿用 `MAX_RESULT_CHARS` / `MAX_FILE_CHARS` 预算）并包进信封，`<file path>` 块显示命令本身；边界转义复用 ADR 0012 的机制，命令输出里的 `</pi-cues>` 无法伪造边界。
+- 输出经 `formatFileBlock` 截断（沿用 `MAX_RESULT_CHARS` / `MAX_FILE_CHARS` 预算）并包进信封，`<file path>` 块显示命令本身；边界转义复用 ADR 0012 的机制，命令输出里的 `</pi-cues>` 无法伪造边界。**（截断与转义机制沿袭，但 `<file>` 块形状已被 ADR 0015 取代：exec 输出现在用 `<command-output command>` 块，截断提示改指「重跑命令」。）**
 - **失败降级为诊断**：非零退出且无输出、超时（10 秒）或模块加载失败时，记诊断、发 toast，不注入任何东西。
 - 去重沿用内容寻址（ADR 0005）：键是命令文本本身，同一条命令每会话最多跑一次。
 - `createLocalBashOperations` 只做静态 `import type` + 动态 `import()` 惰性解析：pi 1.1 的包根会急切加载 codemode，后者在某些依赖解析下因缺 `MCP_TYPESCRIPT_PREAMBLE` 而无法导入；静态 import 会在那些环境里杀死整个扩展，惰性加载则把失败范围限制在 exec 这一个 action 上。

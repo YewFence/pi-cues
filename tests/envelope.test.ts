@@ -82,10 +82,11 @@ describe("formatEnvelope", () => {
 });
 
 describe("escapeEnvelopeTags", () => {
-  it("escapes the six envelope tag prefixes", () => {
-    const text = "<pi-cues a> x </pi-cues> <file path=b> y </file> <skill name=c> z </skill>";
+  it("escapes the eight envelope tag prefixes", () => {
+    const text =
+      "<pi-cues a> x </pi-cues> <file path=b> y </file> <skill name=c> z </skill> <command-output command=d> w </command-output>";
     expect(escapeEnvelopeTags(text)).toBe(
-      "&lt;pi-cues a> x &lt;/pi-cues> &lt;file path=b> y &lt;/file> &lt;skill name=c> z &lt;/skill>",
+      "&lt;pi-cues a> x &lt;/pi-cues> &lt;file path=b> y &lt;/file> &lt;skill name=c> z &lt;/skill> &lt;command-output command=d> w &lt;/command-output>",
     );
   });
 
