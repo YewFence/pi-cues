@@ -1,5 +1,12 @@
 ## What's Changed in 0.2.0
 
+- chore: release v0.2.0 by @github-actions[bot] in [#2](https://github.com/YewFence/pi-cues/pull/2)
+- inject exec output as a <command-output> block by @YewFence
+- emit oxfmt-clean Markdown from the changelog template by @YewFence
+
+**Full Changelog**: https://github.com/YewFence/pi-cues/compare/v0.1.0...v0.2.0
+## What's Changed in 0.2.0
+
 - inject exec output as a <command-output> block by @YewFence
 - emit oxfmt-clean Markdown from the changelog template by @YewFence
 
