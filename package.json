@@ -34,17 +34,17 @@
     "smol-toml": "^1.9.1"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "1.1.0",
-    "@types/node": "^26.6.5",
+    "@earendil-works/pi-coding-agent": "1.4.0",
+    "@types/node": "^26.6.6",
     "@types/picomatch": "^4.0.3",
     "@types/shell-quote": "^1.7.5",
     "ajv": "^8.20.0",
-    "oxfmt": "^0.72.0",
-    "oxlint": "^1.88.0",
+    "oxfmt": "^0.75.0",
+    "oxlint": "^1.90.0",
     "ts-json-schema-generator": "^2.9.0",
-    "tsdown": "^0.23.1",
+    "tsdown": "^0.23.4",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.4"
+    "vitest": "^5.0.5"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"
